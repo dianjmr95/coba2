@@ -1,0 +1,764 @@
+﻿<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Starcomp Solo</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --card: #ffffff;
+      --text: #15223d;
+      --muted: #5d6780;
+      --primary: #3d59ff;
+      --ring: rgba(61, 89, 255, 0.2);
+      --border: #e3e8f4;
+      --success: #1e9b65;
+      --warning: #f49b2e;
+      --info: #2d78e5;
+      --danger: #e54d4d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 0% 0%, #dbe5ff 0%, transparent 40%),
+        radial-gradient(circle at 100% 100%, #d2f3ea 0%, transparent 35%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    .wrap {
+      width: min(1120px, 92vw);
+      margin: 32px auto 48px;
+    }
+
+    .hero {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(1.5rem, 2.3vw, 2.3rem);
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 10px auto 0;
+      max-width: 720px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 10px 35px rgba(30, 42, 75, 0.08);
+    }
+
+    .section-title {
+      margin: 0 0 14px;
+      font-size: 1rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--primary);
+    }
+
+    .inputs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      font-size: 0.84rem;
+      color: var(--muted);
+    }
+
+    input[type="number"], select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 0.95rem;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+      transition: 0.2s ease;
+    }
+
+    input[type="number"]:focus, select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px var(--ring);
+    }
+
+    .toggle-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .toggle-group {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .toggle-group h3 {
+      margin: 0;
+      font-size: 0.86rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .toggle-group.tokopedia {
+      background: rgba(30, 155, 101, 0.05);
+      border-color: rgba(30, 155, 101, 0.25);
+    }
+
+    .toggle-group.tokopedia h3 {
+      color: #1e9b65;
+    }
+
+    .toggle-group.shopee {
+      background: rgba(244, 155, 46, 0.06);
+      border-color: rgba(244, 155, 46, 0.28);
+    }
+
+    .toggle-group.shopee h3 {
+      color: #d9831f;
+    }
+
+    .toggle-group.mall {
+      background: rgba(45, 120, 229, 0.06);
+      border-color: rgba(45, 120, 229, 0.24);
+    }
+
+    .toggle-group.mall h3 {
+      color: #2d78e5;
+    }
+
+    .toggle-item {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.92rem;
+    }
+
+    .toggle-item small {
+      color: var(--muted);
+      display: block;
+      margin-top: 2px;
+    }
+
+    .toggle-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .pct-input {
+      width: 72px !important;
+      padding: 6px 8px !important;
+      font-size: 0.82rem !important;
+      text-align: right;
+    }
+
+    .pct-unit {
+      font-size: 0.8rem;
+      color: var(--muted);
+      min-width: 12px;
+    }
+
+    input[type="checkbox"] {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--primary);
+      flex-shrink: 0;
+    }
+
+    .result-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+
+    .result-head h2 {
+      margin: 0;
+      font-size: 1.05rem;
+    }
+
+    .result-head p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .market-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .market {
+      border-radius: 14px;
+      padding: 12px;
+      border: 1px solid;
+    }
+
+    .market h3 {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+    }
+
+    .market ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 6px;
+    }
+
+    .market li {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .market strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .rincian {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed rgba(21, 34, 61, 0.15);
+    }
+
+    .rincian p {
+      margin: 0 0 6px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .rincian ul {
+      gap: 4px;
+    }
+
+    .rincian li {
+      font-size: 0.82rem;
+    }
+
+    .market.tokopedia {
+      background: rgba(30, 155, 101, 0.08);
+      border-color: rgba(30, 155, 101, 0.25);
+    }
+
+    .market.shopee {
+      background: rgba(244, 155, 46, 0.09);
+      border-color: rgba(244, 155, 46, 0.28);
+    }
+
+    .market.mall {
+      background: rgba(45, 120, 229, 0.08);
+      border-color: rgba(45, 120, 229, 0.24);
+    }
+
+    .summary {
+      margin-top: 12px;
+      border-top: 1px dashed var(--border);
+      padding-top: 10px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .summary .line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .summary .line strong {
+      color: var(--text);
+    }
+
+    .summary .line.highlight strong {
+      color: var(--primary);
+      font-size: 1.02rem;
+    }
+
+    .status {
+      color: var(--success);
+      font-weight: 700;
+    }
+
+    .status.neg {
+      color: var(--danger);
+    }
+
+    @media (max-width: 940px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .inputs {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <h1>Kalkulator Potongan Admin Marketplace</h1>
+      <p>Hitung estimasi potongan, pendapatan bersih, margin keuntungan, dan harga jual rekomendasi untuk Tokopedia, Shopee, dan Tokopedia Mall.</p>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2 class="section-title"><span class="dot"></span>Data Produk & Fee</h2>
+
+        <div class="inputs">
+          <div class="field">
+            <label for="harga">Harga Jual (Rp)</label>
+            <input id="harga" type="number" min="0" step="100" value="100000" />
+          </div>
+
+          <div class="field">
+            <label for="modal">Modal (Rp)</label>
+            <input id="modal" type="number" min="0" step="100" value="65000" />
+          </div>
+
+          <div class="field">
+            <label for="targetMargin">Target Margin (%)</label>
+            <input id="targetMargin" type="number" min="0" step="0.1" value="20" />
+          </div>
+
+          <div class="field">
+            <label for="tokopediaFee">Fee Tokopedia (%)</label>
+            <select id="tokopediaFee">
+              <option value="4.75">4.75%</option>
+              <option value="6.25">6.25%</option>
+              <option value="7.5">7.5%</option>
+              <option value="7.75">7.75%</option>
+              <option value="8">8%</option>
+              <option value="9.5">9.5%</option>
+              <option value="10">10%</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="shopeeFee">Fee Shopee (%)</label>
+            <select id="shopeeFee">
+              <option value="5.25">5.25%</option>
+              <option value="6.50">6.50%</option>
+              <option value="6.75">6.75%</option>
+              <option value="9">9%</option>
+              <option value="9.50">9.50%</option>
+              <option value="10">10%</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="mallFee">Fee Tokopedia Mall (%)</label>
+            <select id="mallFee">
+              <option value="3">3%</option>
+              <option value="3.7">3.7%</option>
+              <option value="6.95">6.95%</option>
+              <option value="7.2">7.2%</option>
+              <option value="7.75">7.75%</option>
+              <option value="8.2">8.2%</option>
+              <option value="9.2">9.2%</option>
+              <option value="10.2">10.2%</option>
+              <option value="11.7">11.7%</option>
+              <option value="12.2">12.2%</option>
+            </select>
+          </div>
+
+        </div>
+
+        <div class="toggle-list">
+          <div class="toggle-group tokopedia">
+            <h3>Tokopedia</h3>
+            <label class="toggle-item">
+              <span>Gratis Ongkir Tokopedia <small>4% (maks Rp 40.000)</small></span>
+              <input id="tokopediaGratisOngkir" type="checkbox" checked />
+            </label>
+            <label class="toggle-item">
+              <span>Komisi Afiliasi Tokopedia <small>Opsional, isi persen sesuai kebutuhan</small></span>
+              <div class="toggle-controls">
+                <input id="tokopediaAfiliasiPct" class="pct-input" type="number" min="0" step="0.1" value="2" />
+                <span class="pct-unit">%</span>
+                <input id="tokopediaAfiliasiAktif" type="checkbox" />
+              </div>
+            </label>
+          </div>
+
+          <div class="toggle-group shopee">
+            <h3>Shopee</h3>
+            <label class="toggle-item">
+              <span>Gratis Ongkir Shopee <small>Pilih kategori dan persentase</small></span>
+              <div class="toggle-controls">
+                <select id="shopeeGratisOngkir" class="pct-input" style="width: 220px !important; text-align: left;">
+                  <option value="off">Tidak aktif</option>
+                  <optgroup label="Di bawah 5kg (maks Rp 40.000)">
+                    <option value="bawah-1" selected>1%</option>
+                    <option value="bawah-2">2%</option>
+                    <option value="bawah-3.5">3.5%</option>
+                    <option value="bawah-5.5">5.5%</option>
+                  </optgroup>
+                  <optgroup label="Di atas 5kg (maks Rp 60.000)">
+                    <option value="atas-2.5">2.5%</option>
+                    <option value="atas-3.5">3.5%</option>
+                    <option value="atas-5">5%</option>
+                    <option value="atas-7">7%</option>
+                  </optgroup>
+                </select>
+              </div>
+            </label>
+            <label class="toggle-item">
+              <span>Promo Ekstra Shopee <small>4.5% (maks Rp 60.000)</small></span>
+              <input id="shopeePromo" type="checkbox" checked />
+            </label>
+            <label class="toggle-item">
+              <span>Asuransi Shopee <small>0.5%</small></span>
+              <input id="shopeeAsuransi" type="checkbox" />
+            </label>
+            <label class="toggle-item">
+              <span>Komisi Afiliasi Shopee <small>Opsional, isi persen sesuai kebutuhan</small></span>
+              <div class="toggle-controls">
+                <input id="shopeeAfiliasiPct" class="pct-input" type="number" min="0" step="0.1" value="2" />
+                <span class="pct-unit">%</span>
+                <input id="shopeeAfiliasiAktif" type="checkbox" />
+              </div>
+            </label>
+          </div>
+
+          <div class="toggle-group mall">
+            <h3>Tokopedia Mall</h3>
+            <label class="toggle-item">
+              <span>Biaya Jasa Tokopedia Mall <small>1.8% (maks Rp 50.000)</small></span>
+              <input id="mallBiayaJasa" type="checkbox" checked />
+            </label>
+            <label class="toggle-item">
+              <span>Gratis Ongkir Tokopedia Mall <small>4% (maks Rp 40.000)</small></span>
+              <input id="mallGratisOngkir" type="checkbox" checked />
+            </label>
+            <label class="toggle-item">
+              <span>Komisi Afiliasi Tokopedia Mall <small>Opsional, isi persen sesuai kebutuhan</small></span>
+              <div class="toggle-controls">
+                <input id="mallAfiliasiPct" class="pct-input" type="number" min="0" step="0.1" value="2" />
+                <span class="pct-unit">%</span>
+                <input id="mallAfiliasiAktif" type="checkbox" />
+              </div>
+            </label>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="result-head">
+          <h2>Hasil Simulasi</h2>
+          <p>Biaya proses semua marketplace: <strong>Rp 1.250</strong></p>
+        </div>
+
+        <div class="market-list">
+          <section class="market tokopedia">
+            <h3>Tokopedia</h3>
+            <ul>
+              <li><span>Total Potongan</span><strong id="potTokopedia">Rp 0</strong></li>
+              <li><span>Pendapatan Bersih</span><strong id="netTokopedia">Rp 0</strong></li>
+            </ul>
+            <div class="rincian">
+              <p>Rincian Potongan Terpilih</p>
+              <ul id="detailTokopedia"></ul>
+            </div>
+          </section>
+
+          <section class="market shopee">
+            <h3>Shopee</h3>
+            <ul>
+              <li><span>Potongan Tetap</span><strong>Rp 350</strong></li>
+              <li><span>Total Potongan</span><strong id="potShopee">Rp 0</strong></li>
+              <li><span>Pendapatan Bersih</span><strong id="netShopee">Rp 0</strong></li>
+            </ul>
+            <div class="rincian">
+              <p>Rincian Potongan Terpilih</p>
+              <ul id="detailShopee"></ul>
+            </div>
+          </section>
+
+          <section class="market mall">
+            <h3>Tokopedia Mall</h3>
+            <ul>
+              <li><span>Total Potongan</span><strong id="potMall">Rp 0</strong></li>
+              <li><span>Pendapatan Bersih</span><strong id="netMall">Rp 0</strong></li>
+            </ul>
+            <div class="rincian">
+              <p>Rincian Potongan Terpilih</p>
+              <ul id="detailMall"></ul>
+            </div>
+          </section>
+        </div>
+
+        <div class="summary">
+          <div class="line"><span>Margin Tokopedia</span><strong id="marginTokopedia">Rp 0 (0%)</strong></div>
+          <div class="line"><span>Margin Shopee</span><strong id="marginShopee">Rp 0 (0%)</strong></div>
+          <div class="line"><span>Margin Tokopedia Mall</span><strong id="marginMall">Rp 0 (0%)</strong></div>
+          <div class="line"><span>Harga Rekomendasi Tokopedia</span><strong id="rekomTokopedia">Rp 0</strong></div>
+          <div class="line"><span>Harga Rekomendasi Shopee</span><strong id="rekomShopee">Rp 0</strong></div>
+          <div class="line"><span>Harga Rekomendasi Tokopedia Mall</span><strong id="rekomMall">Rp 0</strong></div>
+          <div class="line highlight"><span>Paling Menguntungkan</span><strong id="bestMarket">-</strong></div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const f = (id) => document.getElementById(id);
+    const toNum = (val) => Number(val || 0);
+    const rupiah = (num) => "Rp " + Math.round(num).toLocaleString("id-ID");
+
+    function percent(value, pct) {
+      return value * (pct / 100);
+    }
+
+    function cap(value, max) {
+      return Math.min(value, max);
+    }
+
+    function calcPotonganTokopedia(harga, fee, affiliatePct, enabledGratisOngkir, enabledAffiliate) {
+      const biayaProses = 1250;
+      const admin = percent(harga, fee);
+      const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
+      const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
+      const total = admin + biayaProses + gratisOngkir + affiliate;
+      const rincian = [
+        { label: `Fee Admin (${fee}%)`, value: admin },
+        { label: "Biaya Proses", value: biayaProses }
+      ];
+
+      if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
+      if (affiliate > 0) rincian.push({ label: `Komisi Afiliasi (${affiliatePct}%)`, value: affiliate });
+
+      return { total, net: harga - total, rincian };
+    }
+
+    function parseShopeeGratisOngkir(mode) {
+      if (!mode || mode === "off") return { active: false, pct: 0, cap: 0, label: "Tidak aktif" };
+      const [kategori, pctRaw] = mode.split("-");
+      const pct = Number(pctRaw || 0);
+      const capValue = kategori === "atas" ? 60000 : 40000;
+      const kategoriLabel = kategori === "atas" ? "Di atas 5kg" : "Di bawah 5kg";
+      return {
+        active: true,
+        pct,
+        cap: capValue,
+        label: `${kategoriLabel}, ${pct}%`
+      };
+    }
+
+    function calcPotonganShopee(harga, fee, affiliatePct, shopeeGratisOngkirMode, enabledPromo, enabledAsuransi, enabledAffiliate) {
+      const biayaProses = 1250;
+      const biayaTambahan = 350;
+      const admin = percent(harga, fee);
+      const gratisOngkirCfg = parseShopeeGratisOngkir(shopeeGratisOngkirMode);
+      const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
+      const promo = enabledPromo ? cap(percent(harga, 4.5), 60000) : 0;
+      const asuransi = enabledAsuransi ? percent(harga, 0.5) : 0;
+      const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
+      const total = admin + biayaProses + biayaTambahan + gratisOngkir + promo + asuransi + affiliate;
+      const rincian = [
+        { label: `Fee Admin (${fee}%)`, value: admin },
+        { label: "Biaya Proses", value: biayaProses },
+        { label: "Biaya Tambahan Tetap", value: biayaTambahan }
+      ];
+
+      if (gratisOngkirCfg.active) rincian.push({ label: `Gratis Ongkir (${gratisOngkirCfg.label})`, value: gratisOngkir });
+      if (enabledPromo) rincian.push({ label: "Promo Ekstra", value: promo });
+      if (enabledAsuransi) rincian.push({ label: "Asuransi", value: asuransi });
+      if (affiliate > 0) rincian.push({ label: `Komisi Afiliasi (${affiliatePct}%)`, value: affiliate });
+
+      return { total, net: harga - total, rincian };
+    }
+
+    function calcPotonganMall(harga, fee, affiliatePct, enabledBiayaJasa, enabledGratisOngkir, enabledAffiliate) {
+      const biayaProses = 1250;
+      const admin = percent(harga, fee);
+      const biayaJasa = enabledBiayaJasa ? cap(percent(harga, 1.8), 50000) : 0;
+      const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
+      const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
+      const total = admin + biayaProses + biayaJasa + gratisOngkir + affiliate;
+      const rincian = [
+        { label: `Fee Admin (${fee}%)`, value: admin },
+        { label: "Biaya Proses", value: biayaProses }
+      ];
+
+      if (enabledBiayaJasa) rincian.push({ label: "Biaya Jasa", value: biayaJasa });
+      if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
+      if (affiliate > 0) rincian.push({ label: `Komisi Afiliasi (${affiliatePct}%)`, value: affiliate });
+
+      return { total, net: harga - total, rincian };
+    }
+
+    function renderRincian(targetId, items) {
+      const target = f(targetId);
+      if (!target) return;
+
+      if (!items.length) {
+        target.innerHTML = '<li><span>Tidak ada potongan aktif</span><strong>Rp 0</strong></li>';
+        return;
+      }
+
+      target.innerHTML = items
+        .filter((item) => item.value > 0)
+        .map((item) => `<li><span>${item.label}</span><strong>${rupiah(item.value)}</strong></li>`)
+        .join("");
+    }
+
+    function hitung() {
+      const harga = toNum(f("harga").value);
+      const modal = toNum(f("modal").value);
+      const targetMargin = toNum(f("targetMargin").value);
+
+      const tokopediaFee = toNum(f("tokopediaFee").value);
+      const shopeeFee = toNum(f("shopeeFee").value);
+      const mallFee = toNum(f("mallFee").value);
+      const tokopediaAffiliateFee = toNum(f("tokopediaAfiliasiPct").value);
+      const shopeeAffiliateFee = toNum(f("shopeeAfiliasiPct").value);
+      const mallAffiliateFee = toNum(f("mallAfiliasiPct").value);
+
+      const tokopedia = calcPotonganTokopedia(
+        harga,
+        tokopediaFee,
+        tokopediaAffiliateFee,
+        f("tokopediaGratisOngkir").checked,
+        f("tokopediaAfiliasiAktif").checked
+      );
+
+      const shopee = calcPotonganShopee(
+        harga,
+        shopeeFee,
+        shopeeAffiliateFee,
+        f("shopeeGratisOngkir").value,
+        f("shopeePromo").checked,
+        f("shopeeAsuransi").checked,
+        f("shopeeAfiliasiAktif").checked
+      );
+
+      const mall = calcPotonganMall(
+        harga,
+        mallFee,
+        mallAffiliateFee,
+        f("mallBiayaJasa").checked,
+        f("mallGratisOngkir").checked,
+        f("mallAfiliasiAktif").checked
+      );
+
+      f("potTokopedia").textContent = rupiah(tokopedia.total);
+      f("netTokopedia").textContent = rupiah(tokopedia.net);
+
+      f("potShopee").textContent = rupiah(shopee.total);
+      f("netShopee").textContent = rupiah(shopee.net);
+
+      f("potMall").textContent = rupiah(mall.total);
+      f("netMall").textContent = rupiah(mall.net);
+      renderRincian("detailTokopedia", tokopedia.rincian);
+      renderRincian("detailShopee", shopee.rincian);
+      renderRincian("detailMall", mall.rincian);
+
+      const multiplier = (100 + targetMargin) / 100;
+
+      const marginTokopedia = tokopedia.net - modal;
+      const marginShopee = shopee.net - modal;
+      const marginMall = mall.net - modal;
+
+      const pctTokopedia = modal > 0 ? (marginTokopedia / modal) * 100 : 0;
+      const pctShopee = modal > 0 ? (marginShopee / modal) * 100 : 0;
+      const pctMall = modal > 0 ? (marginMall / modal) * 100 : 0;
+
+      const rekomTokopedia = modal * multiplier + tokopedia.total;
+      const rekomShopee = modal * multiplier + shopee.total;
+      const rekomMall = modal * multiplier + mall.total;
+
+      f("marginTokopedia").textContent = `${rupiah(marginTokopedia)} (${pctTokopedia.toFixed(2)}%)`;
+      f("marginShopee").textContent = `${rupiah(marginShopee)} (${pctShopee.toFixed(2)}%)`;
+      f("marginMall").textContent = `${rupiah(marginMall)} (${pctMall.toFixed(2)}%)`;
+
+      f("rekomTokopedia").textContent = rupiah(rekomTokopedia);
+      f("rekomShopee").textContent = rupiah(rekomShopee);
+      f("rekomMall").textContent = rupiah(rekomMall);
+
+      const best = [
+        { name: "Tokopedia", margin: marginTokopedia },
+        { name: "Shopee", margin: marginShopee },
+        { name: "Tokopedia Mall", margin: marginMall }
+      ].sort((a, b) => b.margin - a.margin)[0];
+
+      const bestEl = f("bestMarket");
+      bestEl.textContent = `${best.name} (${rupiah(best.margin)})`;
+      bestEl.className = best.margin >= 0 ? "status" : "status neg";
+    }
+
+    [
+      "harga", "modal", "targetMargin",
+      "tokopediaFee", "shopeeFee", "mallFee",
+      "tokopediaAfiliasiPct", "shopeeAfiliasiPct", "mallAfiliasiPct",
+      "tokopediaGratisOngkir", "shopeeGratisOngkir", "shopeePromo",
+      "shopeeAsuransi", "mallBiayaJasa", "mallGratisOngkir",
+      "tokopediaAfiliasiAktif", "shopeeAfiliasiAktif", "mallAfiliasiAktif"
+    ].forEach((id) => {
+      f(id).addEventListener("input", hitung);
+      f(id).addEventListener("change", hitung);
+    });
+
+    hitung();
+  </script>
+</body>
+</html>
