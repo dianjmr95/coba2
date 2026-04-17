@@ -48,7 +48,7 @@ type PresetItem = {
   data: PresetData;
 };
 
-type SectionId = "kalkulator-potongan" | "pembuatan-nota";
+type SectionId = "kalkulator-potongan" | "pembuatan-nota" | "rekap-penjualan";
 
 type InvoiceItem = {
   id: string;
@@ -57,8 +57,51 @@ type InvoiceItem = {
   harga: number;
 };
 
+type RecapOrderItem = {
+  id: string;
+  nama: string;
+  omzet: number;
+  modal: number;
+};
+
+type RecapBiayaItem = {
+  label: string;
+  value: number;
+};
+
+type RecapEditDraft = {
+  id: string;
+  tanggal: string;
+  marketplace: SalesRecapRow["marketplace"];
+  noPesanan: string;
+  pelanggan: string;
+  omzet: number;
+  modal: number;
+  catatan: string;
+  biayaDetail: RecapBiayaItem[];
+};
+
+type SalesRecapRow = {
+  id: string;
+  tanggal: string;
+  marketplace: "Tokopedia" | "Shopee" | "TikTok";
+  noPesanan: string;
+  pelanggan: string;
+  omzet: number;
+  modal: number;
+  ongkir: number;
+  biayaDetail: RecapBiayaItem[];
+  catatan: string;
+};
+
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
+const RECAP_STORAGE_KEY = "starcomp-sales-recap-v1";
+const MARKETPLACE_BAR_COLOR: Record<SalesRecapRow["marketplace"], string> = {
+  Tokopedia: "bg-emerald-500",
+  Shopee: "bg-orange-500",
+  TikTok: "bg-sky-500"
+};
 
 const DEFAULT_PRESET_DATA: PresetData = {
   tokopediaFee: "4.75",
@@ -413,6 +456,37 @@ export default function Page() {
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([
     { id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }
   ]);
+  const [recapTanggal, setRecapTanggal] = useState(new Date().toISOString().slice(0, 10));
+  const [recapMarketplace, setRecapMarketplace] = useState<SalesRecapRow["marketplace"]>("Tokopedia");
+  const [recapNoPesanan, setRecapNoPesanan] = useState("");
+  const [recapPelanggan, setRecapPelanggan] = useState("");
+  const [recapOmzet, setRecapOmzet] = useState(0);
+  const [recapModal, setRecapModal] = useState(0);
+  const [recapOrderItems, setRecapOrderItems] = useState<RecapOrderItem[]>([
+    { id: `${Date.now()}`, nama: "", omzet: 0, modal: 0 }
+  ]);
+  const [recapOngkir, setRecapOngkir] = useState(0);
+  const [recapMarketplaceBiayaKomisiPlatform, setRecapMarketplaceBiayaKomisiPlatform] = useState(0);
+  const [recapMarketplaceBiayaLayananMall, setRecapMarketplaceBiayaLayananMall] = useState(0);
+  const [recapMarketplaceKomisiDinamis, setRecapMarketplaceKomisiDinamis] = useState(0);
+  const [recapMarketplaceBiayaPemrosesanPesanan, setRecapMarketplaceBiayaPemrosesanPesanan] = useState(0);
+  const [recapShopeeBiayaAdmin, setRecapShopeeBiayaAdmin] = useState(0);
+  const [recapShopeeBiayaLayananPromoXtra, setRecapShopeeBiayaLayananPromoXtra] = useState(0);
+  const [recapShopeeBiayaLayananGratisOngkirXtra, setRecapShopeeBiayaLayananGratisOngkirXtra] = useState(0);
+  const [recapShopeeBiayaProgramHematKirim, setRecapShopeeBiayaProgramHematKirim] = useState(0);
+  const [recapShopeeBiayaProsesPesanan, setRecapShopeeBiayaProsesPesanan] = useState(0);
+  const [recapShopeeKomisiAmsAktif, setRecapShopeeKomisiAmsAktif] = useState(false);
+  const [recapShopeeBiayaKomisiAms, setRecapShopeeBiayaKomisiAms] = useState(0);
+  const [recapCatatan, setRecapCatatan] = useState("");
+  const [recapRows, setRecapRows] = useState<SalesRecapRow[]>([]);
+  const [recapFilterMarketplace, setRecapFilterMarketplace] = useState<"Semua" | SalesRecapRow["marketplace"]>("Semua");
+  const [recapFilterStartDate, setRecapFilterStartDate] = useState("");
+  const [recapFilterEndDate, setRecapFilterEndDate] = useState("");
+  const [recapFilterQuery, setRecapFilterQuery] = useState("");
+  const [recapNotice, setRecapNotice] = useState("");
+  const [recapMenu, setRecapMenu] = useState<"input" | "hasil">("input");
+  const [openBiayaDetailRow, setOpenBiayaDetailRow] = useState<SalesRecapRow | null>(null);
+  const [editRecapDraft, setEditRecapDraft] = useState<RecapEditDraft | null>(null);
 
   const currentPresetData: PresetData = {
     tokopediaFee,
@@ -450,6 +524,82 @@ export default function Page() {
       // ignore write error
     }
   }, [presets]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(RECAP_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+
+      const rows: SalesRecapRow[] = parsed
+        .map((item) => {
+          if (typeof item !== "object" || item === null) return null;
+          const it = item as Record<string, unknown>;
+          const marketplaceValue =
+            it.marketplace === "Tokopedia" || it.marketplace === "Shopee" || it.marketplace === "TikTok"
+              ? it.marketplace
+              : it.marketplace === "Tokopedia Mall"
+                ? "TikTok"
+                : "Tokopedia";
+          const biayaTotal = typeof it.ongkir === "number" && Number.isFinite(it.ongkir) ? Math.max(0, it.ongkir) : 0;
+          const biayaDetail = Array.isArray(it.biayaDetail)
+            ? it.biayaDetail
+                .map((detail) => {
+                  if (typeof detail !== "object" || detail === null) return null;
+                  const d = detail as Record<string, unknown>;
+                  return {
+                    label: typeof d.label === "string" ? d.label : "Biaya",
+                    value: typeof d.value === "number" && Number.isFinite(d.value) ? Math.max(0, d.value) : 0
+                  } satisfies RecapBiayaItem;
+                })
+                .filter((d): d is RecapBiayaItem => Boolean(d))
+            : [];
+
+            return {
+              id: typeof it.id === "string" ? it.id : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+              tanggal: typeof it.tanggal === "string" ? it.tanggal : new Date().toISOString().slice(0, 10),
+              marketplace: marketplaceValue as SalesRecapRow["marketplace"],
+              noPesanan: typeof it.noPesanan === "string" ? it.noPesanan : "",
+              pelanggan: typeof it.pelanggan === "string" ? it.pelanggan : "",
+              omzet: typeof it.omzet === "number" && Number.isFinite(it.omzet) ? Math.max(0, it.omzet) : 0,
+            modal: typeof it.modal === "number" && Number.isFinite(it.modal) ? Math.max(0, it.modal) : 0,
+            ongkir: biayaTotal,
+            biayaDetail: biayaDetail.length ? biayaDetail : [{ label: "Biaya Lain", value: biayaTotal }],
+            catatan: typeof it.catatan === "string" ? it.catatan : ""
+          } satisfies SalesRecapRow;
+        })
+        .filter((row): row is SalesRecapRow => Boolean(row));
+
+      setRecapRows(rows);
+    } catch {
+      setRecapRows([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RECAP_STORAGE_KEY, JSON.stringify(recapRows));
+    } catch {
+      // ignore write error
+    }
+  }, [recapRows]);
+
+  const recapOrderTotals = useMemo(() => {
+    return recapOrderItems.reduce(
+      (acc, item) => {
+        acc.omzet += Math.max(0, item.omzet);
+        acc.modal += Math.max(0, item.modal);
+        return acc;
+      },
+      { omzet: 0, modal: 0 }
+    );
+  }, [recapOrderItems]);
+
+  useEffect(() => {
+    setRecapOmzet(recapOrderTotals.omzet);
+    setRecapModal(recapOrderTotals.modal);
+  }, [recapOrderTotals]);
 
   function applyPreset(data: PresetData) {
     setTokopediaFee(data.tokopediaFee);
@@ -779,6 +929,479 @@ export default function Page() {
     window.open(url, "_blank");
   }
 
+  function addRecapOrderItem() {
+    setRecapOrderItems((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, nama: "", omzet: 0, modal: 0 }]);
+  }
+
+  function updateRecapOrderItem(id: string, field: "nama" | "omzet" | "modal", value: string | number) {
+    setRecapOrderItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        if (field === "nama") return { ...item, nama: String(value) };
+        return { ...item, [field]: Math.max(0, Number(value) || 0) };
+      })
+    );
+  }
+
+  function removeRecapOrderItem(id: string) {
+    setRecapOrderItems((prev) => (prev.length > 1 ? prev.filter((item) => item.id !== id) : prev));
+  }
+
+  function addRecapRow() {
+    const totalBiaya =
+      recapMarketplace === "Shopee"
+        ? recapShopeeTotalBiaya
+        : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok"
+          ? recapMarketplaceTotalBiaya
+          : recapOngkir;
+    const biayaDetail: RecapBiayaItem[] =
+      recapMarketplace === "Shopee"
+        ? [
+            { label: "Biaya Administrasi", value: recapShopeeBiayaAdmin },
+            { label: "Biaya Layanan Promo XTRA", value: recapShopeeBiayaLayananPromoXtra },
+            { label: "Biaya Layanan Gratis Ongkir XTRA", value: recapShopeeBiayaLayananGratisOngkirXtra },
+            { label: "Biaya Program Hemat Biaya Kirim", value: recapShopeeBiayaProgramHematKirim },
+            { label: "Biaya Proses Pesanan", value: recapShopeeBiayaProsesPesanan },
+            { label: "Biaya Komisi AMS", value: recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0 }
+          ].filter((item) => item.value > 0)
+        : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok"
+          ? [
+              { label: "Biaya Komisi Platform", value: recapMarketplaceBiayaKomisiPlatform },
+              { label: "Biaya Layanan Mall", value: recapMarketplaceBiayaLayananMall },
+              { label: "Komisi Dinamis", value: recapMarketplaceKomisiDinamis },
+              { label: "Biaya Pemrosesan Pesanan", value: recapMarketplaceBiayaPemrosesanPesanan }
+            ].filter((item) => item.value > 0)
+          : [{ label: "Biaya Lain", value: recapOngkir }];
+
+    const row: SalesRecapRow = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      tanggal: recapTanggal,
+      marketplace: recapMarketplace,
+      noPesanan: recapNoPesanan,
+      pelanggan: recapPelanggan,
+      omzet: Math.max(0, recapOmzet),
+      modal: Math.max(0, recapModal),
+      ongkir: Math.max(0, totalBiaya),
+      biayaDetail: biayaDetail.length ? biayaDetail : [{ label: "Biaya", value: Math.max(0, totalBiaya) }],
+      catatan: recapCatatan
+    };
+
+    setRecapRows((prev) => [row, ...prev]);
+    setRecapNoPesanan("");
+    setRecapPelanggan("");
+    setRecapOmzet(0);
+    setRecapModal(0);
+    setRecapOrderItems([{ id: `${Date.now()}`, nama: "", omzet: 0, modal: 0 }]);
+    setRecapOngkir(0);
+    setRecapMarketplaceBiayaKomisiPlatform(0);
+    setRecapMarketplaceBiayaLayananMall(0);
+    setRecapMarketplaceKomisiDinamis(0);
+    setRecapMarketplaceBiayaPemrosesanPesanan(0);
+    setRecapShopeeBiayaAdmin(0);
+    setRecapShopeeBiayaLayananPromoXtra(0);
+    setRecapShopeeBiayaLayananGratisOngkirXtra(0);
+    setRecapShopeeBiayaProgramHematKirim(0);
+    setRecapShopeeBiayaProsesPesanan(0);
+    setRecapShopeeKomisiAmsAktif(false);
+    setRecapShopeeBiayaKomisiAms(0);
+    setRecapCatatan("");
+  }
+
+  function deleteRecapRow(id: string) {
+    setRecapRows((prev) => prev.filter((row) => row.id !== id));
+    setOpenBiayaDetailRow((prev) => (prev && prev.id === id ? null : prev));
+    setEditRecapDraft((prev) => (prev && prev.id === id ? null : prev));
+  }
+
+  function openEditRecap(row: SalesRecapRow) {
+    setOpenBiayaDetailRow(null);
+    setEditRecapDraft({
+      id: row.id,
+      tanggal: row.tanggal,
+      marketplace: row.marketplace,
+      noPesanan: row.noPesanan,
+      pelanggan: row.pelanggan,
+      omzet: row.omzet,
+      modal: row.modal,
+      catatan: row.catatan,
+      biayaDetail: row.biayaDetail.length ? row.biayaDetail.map((item) => ({ ...item })) : [{ label: "Biaya", value: row.ongkir }]
+    });
+  }
+
+  function updateEditRecapField<K extends keyof Omit<RecapEditDraft, "biayaDetail">>(key: K, value: RecapEditDraft[K]) {
+    setEditRecapDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+  }
+
+  function updateEditRecapBiayaDetail(index: number, field: "label" | "value", value: string | number) {
+    setEditRecapDraft((prev) => {
+      if (!prev) return prev;
+      const next = prev.biayaDetail.map((item, idx) => {
+        if (idx !== index) return item;
+        if (field === "label") return { ...item, label: String(value) };
+        return { ...item, value: Math.max(0, Number(value) || 0) };
+      });
+      return { ...prev, biayaDetail: next };
+    });
+  }
+
+  function addEditRecapBiayaDetail() {
+    setEditRecapDraft((prev) => (prev ? { ...prev, biayaDetail: [...prev.biayaDetail, { label: "", value: 0 }] } : prev));
+  }
+
+  function removeEditRecapBiayaDetail(index: number) {
+    setEditRecapDraft((prev) => {
+      if (!prev) return prev;
+      if (prev.biayaDetail.length <= 1) return prev;
+      return { ...prev, biayaDetail: prev.biayaDetail.filter((_, idx) => idx !== index) };
+    });
+  }
+
+  function saveEditRecap() {
+    if (!editRecapDraft) return;
+
+    const sanitizedBiayaDetail = editRecapDraft.biayaDetail
+      .map((item) => ({
+        label: item.label.trim() || "Biaya",
+        value: Math.max(0, Number(item.value) || 0)
+      }))
+      .filter((item) => item.label || item.value > 0);
+
+    const biayaDetail = sanitizedBiayaDetail.length ? sanitizedBiayaDetail : [{ label: "Biaya", value: 0 }];
+    const totalBiaya = biayaDetail.reduce((acc, item) => acc + item.value, 0);
+
+    const updatedRow: SalesRecapRow = {
+      id: editRecapDraft.id,
+      tanggal: editRecapDraft.tanggal,
+      marketplace: editRecapDraft.marketplace,
+      noPesanan: editRecapDraft.noPesanan,
+      pelanggan: editRecapDraft.pelanggan,
+      omzet: Math.max(0, Number(editRecapDraft.omzet) || 0),
+      modal: Math.max(0, Number(editRecapDraft.modal) || 0),
+      ongkir: totalBiaya,
+      biayaDetail,
+      catatan: editRecapDraft.catatan
+    };
+
+    setRecapRows((prev) => prev.map((row) => (row.id === updatedRow.id ? updatedRow : row)));
+    setOpenBiayaDetailRow((prev) => (prev && prev.id === updatedRow.id ? updatedRow : prev));
+    setEditRecapDraft(null);
+    setRecapNotice("Data rekap berhasil diperbarui.");
+  }
+
+  function exportRecapPdf() {
+    const byPeriodRows = recapRows.filter((row) => {
+      const passStartDate = recapFilterStartDate ? row.tanggal >= recapFilterStartDate : true;
+      const passEndDate = recapFilterEndDate ? row.tanggal <= recapFilterEndDate : true;
+      return passStartDate && passEndDate;
+    });
+
+    if (!byPeriodRows.length) {
+      setRecapNotice("Tidak ada data pada periode tanggal yang dipilih.");
+      return;
+    }
+
+    const summary = byPeriodRows.reduce(
+      (acc, row) => {
+        acc.omzet += row.omzet;
+        acc.modal += row.modal;
+        acc.biaya += row.ongkir;
+        acc.laba += row.omzet - row.modal - row.ongkir;
+        acc.transaksi += 1;
+        return acc;
+      },
+      { omzet: 0, modal: 0, biaya: 0, laba: 0, transaksi: 0 }
+    );
+
+    const byMarketplace: Record<SalesRecapRow["marketplace"], { omzet: number; laba: number; transaksi: number }> = {
+      Tokopedia: { omzet: 0, laba: 0, transaksi: 0 },
+      Shopee: { omzet: 0, laba: 0, transaksi: 0 },
+      TikTok: { omzet: 0, laba: 0, transaksi: 0 }
+    };
+
+    for (const row of byPeriodRows) {
+      byMarketplace[row.marketplace].omzet += row.omzet;
+      byMarketplace[row.marketplace].laba += row.omzet - row.modal - row.ongkir;
+      byMarketplace[row.marketplace].transaksi += 1;
+    }
+
+    const idDateFormatter = new Intl.DateTimeFormat("id-ID", {
+      day: "2-digit",
+      month: "long",
+      year: "numeric"
+    });
+    const formatDate = (value: string) => {
+      if (!value) return "-";
+      const date = new Date(`${value}T00:00:00`);
+      if (Number.isNaN(date.getTime())) return value;
+      return idDateFormatter.format(date);
+    };
+    const periodLabel =
+      recapFilterStartDate || recapFilterEndDate
+        ? `${formatDate(recapFilterStartDate)} s/d ${formatDate(recapFilterEndDate)}`
+        : "Semua tanggal";
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const rowsHtml = byPeriodRows
+      .map((row, idx) => {
+        const laba = row.omzet - row.modal - row.ongkir;
+        return `
+          <tr>
+            <td>${idx + 1}</td>
+            <td>${escapeHtml(row.tanggal)}</td>
+            <td>${escapeHtml(row.marketplace)}</td>
+            <td>${escapeHtml(row.noPesanan || "-")}</td>
+            <td>${escapeHtml(row.pelanggan || "-")}</td>
+            <td class="num">${rupiah(row.omzet)}</td>
+            <td class="num">${rupiah(row.modal)}</td>
+            <td class="num">${rupiah(row.ongkir)}</td>
+            <td class="num ${laba < 0 ? "neg" : ""}">${rupiah(laba)}</td>
+            <td>${escapeHtml(row.catatan || "-")}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const html = `<!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Rekap Penjualan PDF</title>
+        <style>
+          body { font-family: Arial, sans-serif; color: #0f172a; margin: 20px; }
+          h1 { margin: 0 0 4px; font-size: 20px; }
+          p { margin: 0 0 4px; font-size: 12px; color: #334155; }
+          .summary { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 8px; margin: 14px 0; }
+          .box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; }
+          .box b { display: block; font-size: 13px; margin-top: 4px; color: #0f172a; }
+          .market { margin: 12px 0; }
+          .market table { width: 100%; border-collapse: collapse; }
+          .market th, .market td { border: 1px solid #e2e8f0; padding: 6px 8px; font-size: 12px; text-align: left; }
+          .market td.num, .data td.num { text-align: right; }
+          .data { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          .data th, .data td { border: 1px solid #e2e8f0; padding: 6px 8px; font-size: 11px; vertical-align: top; }
+          .data thead { background: #f1f5f9; }
+          .data td.num, .data th.num { text-align: right; }
+          .neg { color: #be123c; }
+        </style>
+      </head>
+      <body>
+        <h1>Rekap Penjualan Marketplace</h1>
+        <p>Periode: <strong>${escapeHtml(periodLabel)}</strong></p>
+        <p>Tanggal cetak: ${escapeHtml(idDateFormatter.format(new Date()))}</p>
+
+        <div class="summary">
+          <div class="box">Total Transaksi<b>${summary.transaksi}</b></div>
+          <div class="box">Total Omzet<b>${rupiah(summary.omzet)}</b></div>
+          <div class="box">Total Modal<b>${rupiah(summary.modal)}</b></div>
+          <div class="box">Total Biaya<b>${rupiah(summary.biaya)}</b></div>
+          <div class="box">Laba Bersih<b class="${summary.laba < 0 ? "neg" : ""}">${rupiah(summary.laba)}</b></div>
+        </div>
+
+        <div class="market">
+          <table>
+            <thead>
+              <tr>
+                <th>Marketplace</th>
+                <th class="num">Transaksi</th>
+                <th class="num">Omzet</th>
+                <th class="num">Laba</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Tokopedia</td><td class="num">${byMarketplace.Tokopedia.transaksi}</td><td class="num">${rupiah(byMarketplace.Tokopedia.omzet)}</td><td class="num ${byMarketplace.Tokopedia.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.Tokopedia.laba)}</td></tr>
+              <tr><td>Shopee</td><td class="num">${byMarketplace.Shopee.transaksi}</td><td class="num">${rupiah(byMarketplace.Shopee.omzet)}</td><td class="num ${byMarketplace.Shopee.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.Shopee.laba)}</td></tr>
+              <tr><td>TikTok</td><td class="num">${byMarketplace.TikTok.transaksi}</td><td class="num">${rupiah(byMarketplace.TikTok.omzet)}</td><td class="num ${byMarketplace.TikTok.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.TikTok.laba)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <table class="data">
+          <thead>
+            <tr>
+              <th>No</th>
+              <th>Tanggal</th>
+              <th>Marketplace</th>
+              <th>No Pesanan</th>
+              <th>Pelanggan</th>
+              <th class="num">Omzet</th>
+              <th class="num">Modal</th>
+              <th class="num">Biaya</th>
+              <th class="num">Laba</th>
+              <th>Catatan</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+
+        <script>
+          window.onload = function () { setTimeout(function () { window.print(); }, 120); };
+        </script>
+      </body>
+    </html>`;
+
+    const w = window.open("", "_blank", "width=1280,height=800");
+    if (!w) return;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    setRecapNotice(`PDF siap dicetak untuk periode ${periodLabel}.`);
+  }
+
+  const filteredRecapRows = useMemo(() => {
+    const query = recapFilterQuery.trim().toLowerCase();
+
+    return recapRows.filter((row) => {
+      const passMarketplace = recapFilterMarketplace === "Semua" ? true : row.marketplace === recapFilterMarketplace;
+      const passStartDate = recapFilterStartDate ? row.tanggal >= recapFilterStartDate : true;
+      const passEndDate = recapFilterEndDate ? row.tanggal <= recapFilterEndDate : true;
+      const passQuery = query
+        ? `${row.noPesanan} ${row.pelanggan} ${row.catatan}`.toLowerCase().includes(query)
+        : true;
+
+      return passMarketplace && passStartDate && passEndDate && passQuery;
+    });
+  }, [recapRows, recapFilterMarketplace, recapFilterStartDate, recapFilterEndDate, recapFilterQuery]);
+
+  const recapSummary = useMemo(() => {
+    const omzet = filteredRecapRows.reduce((acc, r) => acc + r.omzet, 0);
+    const modal = filteredRecapRows.reduce((acc, r) => acc + r.modal, 0);
+    const ongkir = filteredRecapRows.reduce((acc, r) => acc + r.ongkir, 0);
+    const laba = omzet - modal - ongkir;
+    return { omzet, modal, ongkir, laba, transaksi: filteredRecapRows.length };
+  }, [filteredRecapRows]);
+
+  const recapByMarketplace = useMemo(() => {
+    const groups: Record<SalesRecapRow["marketplace"], { omzet: number; laba: number; transaksi: number }> = {
+      Tokopedia: { omzet: 0, laba: 0, transaksi: 0 },
+      Shopee: { omzet: 0, laba: 0, transaksi: 0 },
+      TikTok: { omzet: 0, laba: 0, transaksi: 0 }
+    };
+
+    for (const row of filteredRecapRows) {
+      groups[row.marketplace].omzet += row.omzet;
+      groups[row.marketplace].laba += row.omzet - row.modal - row.ongkir;
+      groups[row.marketplace].transaksi += 1;
+    }
+
+    return groups;
+  }, [filteredRecapRows]);
+
+  const recapAiInsights = useMemo(() => {
+    if (!filteredRecapRows.length) return [] as string[];
+
+    const insights: string[] = [];
+    const activeMarkets = (Object.keys(recapByMarketplace) as SalesRecapRow["marketplace"][])
+      .map((name) => ({ name, ...recapByMarketplace[name] }))
+      .filter((item) => item.transaksi > 0)
+      .sort((a, b) => b.laba - a.laba);
+
+    if (activeMarkets.length) {
+      const best = activeMarkets[0];
+      insights.push(
+        `Marketplace paling profit saat ini: ${best.name} (${best.transaksi} transaksi, laba ${rupiah(best.laba)}).`
+      );
+    }
+
+    if (activeMarkets.length > 1) {
+      const weakest = activeMarkets[activeMarkets.length - 1];
+      insights.push(
+        `Marketplace yang perlu dievaluasi: ${weakest.name} (laba ${rupiah(weakest.laba)}).`
+      );
+    }
+
+    const avgOmzet = recapSummary.transaksi > 0 ? recapSummary.omzet / recapSummary.transaksi : 0;
+    const avgLaba = recapSummary.transaksi > 0 ? recapSummary.laba / recapSummary.transaksi : 0;
+    insights.push(`Rata-rata omzet per transaksi: ${rupiah(avgOmzet)}.`);
+    insights.push(`Rata-rata laba per transaksi: ${rupiah(avgLaba)}.`);
+
+    const ratioBiaya = recapSummary.omzet > 0 ? (recapSummary.ongkir / recapSummary.omzet) * 100 : 0;
+    insights.push(`Rasio biaya terhadap omzet: ${ratioBiaya.toFixed(1)}%.`);
+
+    const rugiCount = filteredRecapRows.filter((row) => row.omzet - row.modal - row.ongkir < 0).length;
+    if (rugiCount > 0) {
+      insights.push(`Ada ${rugiCount} transaksi rugi, cek detail biaya untuk menekan kebocoran margin.`);
+    }
+
+    const highCostCount = filteredRecapRows.filter((row) => row.omzet > 0 && row.ongkir / row.omzet >= 0.2).length;
+    if (highCostCount > 0) {
+      insights.push(`Ada ${highCostCount} transaksi dengan rasio biaya >= 20% dari omzet.`);
+    }
+
+    if (filteredRecapRows.length >= 4) {
+      const sortedRows = [...filteredRecapRows].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+      const half = Math.floor(sortedRows.length / 2);
+      const firstHalf = sortedRows.slice(0, half);
+      const secondHalf = sortedRows.slice(half);
+      const avgFirst =
+        firstHalf.reduce((acc, row) => acc + (row.omzet - row.modal - row.ongkir), 0) / Math.max(1, firstHalf.length);
+      const avgSecond =
+        secondHalf.reduce((acc, row) => acc + (row.omzet - row.modal - row.ongkir), 0) / Math.max(1, secondHalf.length);
+      const diff = avgSecond - avgFirst;
+
+      if (Math.abs(diff) < 1000) {
+        insights.push("Tren laba relatif stabil di periode terfilter.");
+      } else if (diff > 0) {
+        insights.push(`Tren laba membaik, naik sekitar ${rupiah(diff)} per transaksi.`);
+      } else {
+        insights.push(`Tren laba menurun, turun sekitar ${rupiah(Math.abs(diff))} per transaksi.`);
+      }
+    }
+
+    return insights;
+  }, [filteredRecapRows, recapSummary, recapByMarketplace]);
+
+  const recapShopeeTotalBiaya = useMemo(() => {
+    const komisiAms = recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0;
+    return (
+      recapShopeeBiayaAdmin +
+      recapShopeeBiayaLayananPromoXtra +
+      recapShopeeBiayaLayananGratisOngkirXtra +
+      recapShopeeBiayaProgramHematKirim +
+      recapShopeeBiayaProsesPesanan +
+      komisiAms
+    );
+  }, [
+    recapShopeeBiayaAdmin,
+    recapShopeeBiayaLayananPromoXtra,
+    recapShopeeBiayaLayananGratisOngkirXtra,
+    recapShopeeBiayaProgramHematKirim,
+    recapShopeeBiayaProsesPesanan,
+    recapShopeeKomisiAmsAktif,
+    recapShopeeBiayaKomisiAms
+  ]);
+
+  const recapMarketplaceTotalBiaya = useMemo(() => {
+    return (
+      recapMarketplaceBiayaKomisiPlatform +
+      recapMarketplaceBiayaLayananMall +
+      recapMarketplaceKomisiDinamis +
+      recapMarketplaceBiayaPemrosesanPesanan
+    );
+  }, [
+    recapMarketplaceBiayaKomisiPlatform,
+    recapMarketplaceBiayaLayananMall,
+    recapMarketplaceKomisiDinamis,
+    recapMarketplaceBiayaPemrosesanPesanan
+  ]);
+
+  const recapChartData = useMemo(() => {
+    const items = (Object.keys(recapByMarketplace) as SalesRecapRow["marketplace"][]).map((name) => ({
+      name,
+      omzet: recapByMarketplace[name].omzet
+    }));
+    const maxOmzet = items.reduce((highest, item) => Math.max(highest, item.omzet), 0);
+
+    return items.map((item) => ({
+      ...item,
+      widthPct: maxOmzet > 0 ? Math.max(6, Math.round((item.omzet / maxOmzet) * 100)) : 0
+    }));
+  }, [recapByMarketplace]);
+
   const hasil = useMemo(() => {
     if (harga <= 0 || modal <= 0) {
       const emptyCalc: CalcResult = { total: 0, net: 0, rincian: [] };
@@ -947,7 +1570,47 @@ export default function Page() {
             >
               Pembuatan Nota/Faktur
             </button>
+            <button
+              type="button"
+              onClick={() => setActiveSection("rekap-penjualan")}
+              className={`rounded-xl border px-3 py-2 font-medium transition ${
+                activeSection === "rekap-penjualan"
+                  ? "border-stone-700 bg-slate-900 text-white"
+                  : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
+              }`}
+            >
+              Rekap Penjualan Marketplace
+            </button>
           </nav>
+          {activeSection === "rekap-penjualan" ? (
+            <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Grafik Penjualan</p>
+              {recapSummary.transaksi > 0 ? (
+                <div className="mt-2 space-y-2">
+                  {recapChartData.map((item) => (
+                    <div key={item.name} className="space-y-1">
+                      <div className="flex items-center justify-between text-[11px] text-slate-600">
+                        <span className="font-medium text-slate-700">{item.name}</span>
+                        <span>{rupiah(item.omzet)}</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-stone-200">
+                        <div
+                          className={`h-full rounded-full ${MARKETPLACE_BAR_COLOR[item.name]}`}
+                          style={{ width: `${item.widthPct}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">Belum ada data rekap untuk ditampilkan.</p>
+              )}
+              <div className="mt-3 grid gap-1 text-xs text-slate-600">
+                <p>Total transaksi: <strong className="text-slate-800">{recapSummary.transaksi}</strong></p>
+                <p>Total omzet: <strong className="text-slate-800">{rupiah(recapSummary.omzet)}</strong></p>
+              </div>
+            </div>
+          ) : null}
         </aside>
 
         <div className="space-y-5">
@@ -1300,6 +1963,506 @@ export default function Page() {
           ) : (
             <p className="text-sm text-slate-600">Klik "Buka Jendela" untuk membuat nota/faktur penjualan terpisah dari kalkulator.</p>
           )}
+        </article>
+      </section>
+      ) : null}
+
+      {activeSection === "rekap-penjualan" ? (
+      <section id="rekap-penjualan">
+        <article className="card-shell p-5">
+          <div className="mb-3 border-b border-stone-200 pb-3">
+            <h2 className="text-base font-bold">Rekap Penjualan Marketplace</h2>
+            <p className="text-xs text-slate-500">Pisahkan menu input dan hasil agar data tidak tercampur.</p>
+          </div>
+          {recapNotice ? <p className="mb-3 text-xs text-slate-600">{recapNotice}</p> : null}
+          <div className="mb-4 grid gap-2 sm:w-fit sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setRecapMenu("input")}
+              className={`rounded-2xl border px-3 py-2 text-sm font-medium transition ${
+                recapMenu === "input"
+                  ? "border-stone-700 bg-slate-900 text-white"
+                  : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
+              }`}
+            >
+              Input Rekap
+            </button>
+            <button
+              type="button"
+              onClick={() => setRecapMenu("hasil")}
+              className={`rounded-2xl border px-3 py-2 text-sm font-medium transition ${
+                recapMenu === "hasil"
+                  ? "border-stone-700 bg-slate-900 text-white"
+                  : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
+              }`}
+            >
+              Hasil Rekap
+            </button>
+          </div>
+
+          {recapMenu === "input" ? (
+          <div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1.5 text-sm text-slate-600">
+              <span>Tanggal</span>
+              <input type="date" value={recapTanggal} onChange={(e) => setRecapTanggal(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+            </label>
+            <label className="grid gap-1.5 text-sm text-slate-600">
+              <span>Marketplace</span>
+              <select value={recapMarketplace} onChange={(e) => setRecapMarketplace(e.target.value as SalesRecapRow["marketplace"])} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                <option value="Tokopedia">Tokopedia</option>
+                <option value="Shopee">Shopee</option>
+                <option value="TikTok">TikTok</option>
+              </select>
+            </label>
+            <label className="grid gap-1.5 text-sm text-slate-600">
+              <span>No Pesanan</span>
+              <input value={recapNoPesanan} onChange={(e) => setRecapNoPesanan(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+            </label>
+            <label className="grid gap-1.5 text-sm text-slate-600">
+              <span>Nama Pelanggan</span>
+              <input value={recapPelanggan} onChange={(e) => setRecapPelanggan(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+            </label>
+            <div className="grid gap-2 md:col-span-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-700">Item Barang per Order</p>
+                <button type="button" onClick={addRecapOrderItem} className="rounded-xl border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                  Tambah Barang
+                </button>
+              </div>
+              <div className="grid gap-2">
+                {recapOrderItems.map((item) => (
+                  <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 md:grid-cols-[1.4fr_130px_130px_auto]">
+                    <input
+                      placeholder="Nama barang"
+                      value={item.nama}
+                      onChange={(e) => updateRecapOrderItem(item.id, "nama", e.target.value)}
+                      className="rounded-xl border border-stone-200 px-2 py-2 text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      placeholder="Omzet"
+                      value={item.omzet}
+                      onChange={(e) => updateRecapOrderItem(item.id, "omzet", Number(e.target.value || 0))}
+                      className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      placeholder="Modal"
+                      value={item.modal}
+                      onChange={(e) => updateRecapOrderItem(item.id, "modal", Number(e.target.value || 0))}
+                      className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeRecapOrderItem(item.id)}
+                      className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={recapOrderItems.length <= 1}
+                    >
+                      Hapus
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <label className="grid gap-1.5 text-sm text-slate-600">
+                  <span>Total Omzet (Rp)</span>
+                  <input type="number" min={0} value={recapOmzet} readOnly className="w-full rounded-2xl border border-stone-200 bg-stone-100 px-3 py-2.5 text-slate-800 outline-none" />
+                </label>
+                <label className="grid gap-1.5 text-sm text-slate-600">
+                  <span>Total Modal (Rp)</span>
+                  <input type="number" min={0} value={recapModal} readOnly className="w-full rounded-2xl border border-stone-200 bg-stone-100 px-3 py-2.5 text-slate-800 outline-none" />
+                </label>
+              </div>
+            </div>
+            {recapMarketplace === "Shopee" ? (
+              <div className="grid gap-2 md:col-span-2">
+                <p className="text-sm font-semibold text-slate-700">Rincian Biaya Shopee</p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Administrasi (Rp)</span>
+                    <input type="number" min={0} value={recapShopeeBiayaAdmin} onChange={(e) => setRecapShopeeBiayaAdmin(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Layanan Promo XTRA (Rp)</span>
+                    <input type="number" min={0} value={recapShopeeBiayaLayananPromoXtra} onChange={(e) => setRecapShopeeBiayaLayananPromoXtra(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Layanan Gratis Ongkir XTRA (Rp)</span>
+                    <input type="number" min={0} value={recapShopeeBiayaLayananGratisOngkirXtra} onChange={(e) => setRecapShopeeBiayaLayananGratisOngkirXtra(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Program Hemat Biaya Kirim (Rp)</span>
+                    <input type="number" min={0} value={recapShopeeBiayaProgramHematKirim} onChange={(e) => setRecapShopeeBiayaProgramHematKirim(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Proses Pesanan (Rp)</span>
+                    <input type="number" min={0} value={recapShopeeBiayaProsesPesanan} onChange={(e) => setRecapShopeeBiayaProsesPesanan(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <div className="grid gap-1.5 rounded-2xl border border-stone-200 bg-stone-50/80 p-3 text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">Biaya Komisi AMS</span>
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input type="checkbox" checked={recapShopeeKomisiAmsAktif} onChange={(e) => setRecapShopeeKomisiAmsAktif(e.target.checked)} />
+                      Komisi AMS aktif (jika ada)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0}
+                      onChange={(e) => setRecapShopeeBiayaKomisiAms(Number(e.target.value || 0))}
+                      disabled={!recapShopeeKomisiAmsAktif}
+                      className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition disabled:cursor-not-allowed disabled:bg-stone-100 focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-slate-600">
+                  Total biaya Shopee: <strong className="text-slate-900">{rupiah(recapShopeeTotalBiaya)}</strong>
+                </p>
+              </div>
+            ) : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok" ? (
+              <div className="grid gap-2 md:col-span-2">
+                <p className="text-sm font-semibold text-slate-700">Rincian Biaya {recapMarketplace}</p>
+                <div className="grid gap-2 md:grid-cols-2">
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Komisi Platform (Rp)</span>
+                    <input type="number" min={0} value={recapMarketplaceBiayaKomisiPlatform} onChange={(e) => setRecapMarketplaceBiayaKomisiPlatform(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Layanan Mall (Rp)</span>
+                    <input type="number" min={0} value={recapMarketplaceBiayaLayananMall} onChange={(e) => setRecapMarketplaceBiayaLayananMall(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Komisi Dinamis (Rp)</span>
+                    <input type="number" min={0} value={recapMarketplaceKomisiDinamis} onChange={(e) => setRecapMarketplaceKomisiDinamis(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Biaya Pemrosesan Pesanan (Rp)</span>
+                    <input type="number" min={0} value={recapMarketplaceBiayaPemrosesanPesanan} onChange={(e) => setRecapMarketplaceBiayaPemrosesanPesanan(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                </div>
+                <p className="text-xs text-slate-600">
+                  Total biaya {recapMarketplace}: <strong className="text-slate-900">{rupiah(recapMarketplaceTotalBiaya)}</strong>
+                </p>
+              </div>
+            ) : (
+              <label className="grid gap-1.5 text-sm text-slate-600">
+                <span>Ongkir / Biaya Lain (Rp)</span>
+                <input type="number" min={0} value={recapOngkir} onChange={(e) => setRecapOngkir(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+              </label>
+            )}
+            <label className="grid gap-1.5 text-sm text-slate-600">
+              <span>Catatan</span>
+              <input value={recapCatatan} onChange={(e) => setRecapCatatan(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+            </label>
+          </div>
+
+          <div className="mt-3 flex justify-end">
+            <button type="button" onClick={() => { addRecapRow(); setRecapMenu("hasil"); }} className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800">
+              Tambah Rekap & Lihat Hasil
+            </button>
+          </div>
+          </div>
+          ) : null}
+
+          {recapMenu === "hasil" ? (
+          <div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button type="button" onClick={exportRecapPdf} className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800">
+              Export PDF (Periode Tanggal)
+            </button>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50/70 p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Filter Data</p>
+            <div className="grid gap-2 md:grid-cols-4">
+              <label className="grid gap-1 text-xs text-slate-600">
+                <span>Dari Tanggal</span>
+                <input type="date" value={recapFilterStartDate} onChange={(e) => setRecapFilterStartDate(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+              </label>
+              <label className="grid gap-1 text-xs text-slate-600">
+                <span>Sampai Tanggal</span>
+                <input type="date" value={recapFilterEndDate} onChange={(e) => setRecapFilterEndDate(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+              </label>
+              <label className="grid gap-1 text-xs text-slate-600">
+                <span>Marketplace</span>
+                <select value={recapFilterMarketplace} onChange={(e) => setRecapFilterMarketplace(e.target.value as "Semua" | SalesRecapRow["marketplace"])} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                  <option value="Semua">Semua Marketplace</option>
+                  <option value="Tokopedia">Tokopedia</option>
+                  <option value="Shopee">Shopee</option>
+                  <option value="TikTok">TikTok</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-slate-600">
+                <span>Cari Data</span>
+                <input value={recapFilterQuery} onChange={(e) => setRecapFilterQuery(e.target.value)} placeholder="No pesanan / pelanggan / catatan" className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+              </label>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-2 md:grid-cols-5">
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Total Transaksi</p>
+              <p className="font-semibold text-slate-900">{recapSummary.transaksi}</p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Total Omzet</p>
+              <p className="font-semibold text-slate-900">{rupiah(recapSummary.omzet)}</p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Total Modal</p>
+              <p className="font-semibold text-slate-900">{rupiah(recapSummary.modal)}</p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Total Ongkir/Biaya</p>
+              <p className="font-semibold text-slate-900">{rupiah(recapSummary.ongkir)}</p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Laba Bersih</p>
+              <p className={recapSummary.laba >= 0 ? "font-semibold text-slate-900" : "font-semibold text-rose-600"}>
+                {rupiah(recapSummary.laba)}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-3 rounded-2xl border border-stone-200 bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Analisa AI</p>
+            {recapAiInsights.length ? (
+              <div className="mt-2 grid gap-1.5">
+                {recapAiInsights.map((insight, index) => (
+                  <p key={`ai-insight-${index}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm text-slate-700">
+                    {index + 1}. {insight}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-slate-500">Belum ada data untuk dianalisa.</p>
+            )}
+          </div>
+
+          <div className="mt-3 grid gap-2 md:grid-cols-3">
+            {(Object.keys(recapByMarketplace) as SalesRecapRow["marketplace"][]).map((name) => (
+              <div key={name} className="rounded-2xl border border-stone-200 bg-white px-3 py-2">
+                <p className="text-xs font-semibold text-slate-700">{name}</p>
+                <p className="text-xs text-slate-500">{recapByMarketplace[name].transaksi} transaksi</p>
+                <p className="mt-1 text-sm text-slate-600">Omzet: <strong className="text-slate-900">{rupiah(recapByMarketplace[name].omzet)}</strong></p>
+                <p className="text-sm text-slate-600">Laba: <strong className={recapByMarketplace[name].laba >= 0 ? "text-slate-900" : "text-rose-600"}>{rupiah(recapByMarketplace[name].laba)}</strong></p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3 overflow-x-auto rounded-2xl border border-stone-200">
+            <table className="min-w-full text-sm">
+              <thead className="bg-stone-50 text-slate-700">
+                <tr>
+                  <th className="px-3 py-2 text-left">Tanggal</th>
+                  <th className="px-3 py-2 text-left">Marketplace</th>
+                  <th className="px-3 py-2 text-left">No Pesanan</th>
+                  <th className="px-3 py-2 text-left">Pelanggan</th>
+                  <th className="px-3 py-2 text-right">Omzet</th>
+                  <th className="px-3 py-2 text-right">Modal</th>
+                  <th className="px-3 py-2 text-right">Biaya</th>
+                  <th className="px-3 py-2 text-right">Laba</th>
+                  <th className="px-3 py-2 text-left">Catatan</th>
+                  <th className="px-3 py-2 text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRecapRows.length ? (
+                  filteredRecapRows.map((row) => {
+                    const laba = row.omzet - row.modal - row.ongkir;
+                    return (
+                      <tr key={row.id} className="border-t border-stone-100">
+                        <td className="px-3 py-2">{row.tanggal}</td>
+                        <td className="px-3 py-2">{row.marketplace}</td>
+                        <td className="px-3 py-2">{row.noPesanan || "-"}</td>
+                        <td className="px-3 py-2">{row.pelanggan || "-"}</td>
+                        <td className="px-3 py-2 text-right">{rupiah(row.omzet)}</td>
+                        <td className="px-3 py-2 text-right">{rupiah(row.modal)}</td>
+                        <td className="px-3 py-2 text-right">{rupiah(row.ongkir)}</td>
+                        <td className={laba >= 0 ? "px-3 py-2 text-right text-slate-900" : "px-3 py-2 text-right text-rose-600"}>{rupiah(laba)}</td>
+                        <td className="px-3 py-2">{row.catatan || "-"}</td>
+                        <td className="px-3 py-2 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button type="button" onClick={() => openEditRecap(row)} className="rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
+                              Edit
+                            </button>
+                            <button type="button" onClick={() => setOpenBiayaDetailRow(row)} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                              Detail Biaya
+                            </button>
+                            <button type="button" onClick={() => deleteRecapRow(row.id)} className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                              Hapus
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td className="px-3 py-4 text-center text-slate-500" colSpan={10}>
+                      Belum ada data rekap.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {openBiayaDetailRow ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+              <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-4 shadow-xl">
+                <div className="mb-3 flex items-start justify-between gap-2 border-b border-stone-200 pb-2">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">Detail Biaya</p>
+                    <p className="text-xs text-slate-500">
+                      {openBiayaDetailRow.marketplace} · {openBiayaDetailRow.noPesanan || "-"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpenBiayaDetailRow(null)}
+                    className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                  >
+                    Tutup
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {openBiayaDetailRow.biayaDetail.length ? (
+                    openBiayaDetailRow.biayaDetail.map((detail, index) => (
+                      <div key={`${detail.label}-${index}`} className="flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                        <span className="text-slate-700">{detail.label}</span>
+                        <strong className="text-slate-900">{rupiah(detail.value)}</strong>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-slate-500">Belum ada detail biaya.</p>
+                  )}
+                </div>
+                <div className="mt-3 border-t border-stone-200 pt-2 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-slate-700">Total Biaya</span>
+                    <strong className="text-slate-900">{rupiah(openBiayaDetailRow.ongkir)}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {editRecapDraft ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
+              <div className="w-full max-w-2xl rounded-2xl border border-stone-200 bg-white p-4 shadow-xl">
+                <div className="mb-3 flex items-center justify-between border-b border-stone-200 pb-2">
+                  <p className="text-sm font-semibold text-slate-900">Edit Data Rekap</p>
+                  <button
+                    type="button"
+                    onClick={() => setEditRecapDraft(null)}
+                    className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                  >
+                    Tutup
+                  </button>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-2">
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Tanggal</span>
+                    <input type="date" value={editRecapDraft.tanggal} onChange={(e) => updateEditRecapField("tanggal", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Marketplace</span>
+                    <select value={editRecapDraft.marketplace} onChange={(e) => updateEditRecapField("marketplace", e.target.value as SalesRecapRow["marketplace"])} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                      <option value="Tokopedia">Tokopedia</option>
+                      <option value="Shopee">Shopee</option>
+                      <option value="TikTok">TikTok</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>No Pesanan</span>
+                    <input value={editRecapDraft.noPesanan} onChange={(e) => updateEditRecapField("noPesanan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Pelanggan</span>
+                    <input value={editRecapDraft.pelanggan} onChange={(e) => updateEditRecapField("pelanggan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Omzet (Rp)</span>
+                    <input type="number" min={0} value={editRecapDraft.omzet} onChange={(e) => updateEditRecapField("omzet", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Modal (Rp)</span>
+                    <input type="number" min={0} value={editRecapDraft.modal} onChange={(e) => updateEditRecapField("modal", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                  </label>
+                </div>
+
+                <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Rincian Biaya</p>
+                    <button type="button" onClick={addEditRecapBiayaDetail} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                      Tambah Biaya
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {editRecapDraft.biayaDetail.map((item, index) => (
+                      <div key={`edit-biaya-${index}`} className="grid gap-2 md:grid-cols-[1.4fr_140px_auto]">
+                        <input
+                          value={item.label}
+                          onChange={(e) => updateEditRecapBiayaDetail(index, "label", e.target.value)}
+                          placeholder="Nama biaya"
+                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          value={item.value}
+                          onChange={(e) => updateEditRecapBiayaDetail(index, "value", Number(e.target.value || 0))}
+                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => removeEditRecapBiayaDetail(index)}
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={editRecapDraft.biayaDetail.length <= 1}
+                        >
+                          Hapus
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-sm">
+                    <span className="text-slate-600">Total Biaya</span>
+                    <strong className="text-slate-900">
+                      {rupiah(editRecapDraft.biayaDetail.reduce((acc, item) => acc + Math.max(0, Number(item.value) || 0), 0))}
+                    </strong>
+                  </div>
+                </div>
+
+                <label className="mt-3 grid gap-1 text-xs text-slate-600">
+                  <span>Catatan</span>
+                  <input value={editRecapDraft.catatan} onChange={(e) => updateEditRecapField("catatan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                </label>
+
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditRecapDraft(null)}
+                    className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveEditRecap}
+                    className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-800"
+                  >
+                    Simpan Perubahan
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          </div>
+          ) : null}
         </article>
       </section>
       ) : null}
