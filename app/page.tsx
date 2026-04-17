@@ -1,6 +1,7 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { supabase } from "./supabaseClient";
 
 type ShopeeOngkirMode =
   | "off"
@@ -96,7 +97,7 @@ type SalesRecapRow = {
 
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
-const RECAP_STORAGE_KEY = "starcomp-sales-recap-v1";
+const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
 const MARKETPLACE_BAR_COLOR: Record<SalesRecapRow["marketplace"], string> = {
   Tokopedia: "bg-emerald-500",
   Shopee: "bg-orange-500",
@@ -125,6 +126,73 @@ const rupiah = (num: number) => `Rp ${Math.round(num).toLocaleString("id-ID")}`;
 const rupiahOrDash = (num: number) => (Number.isFinite(num) ? rupiah(num) : "-");
 const cap = (value: number, max: number) => Math.min(value, max);
 const percent = (value: number, pct: number) => value * (pct / 100);
+const toSafeNumber = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, value);
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return Math.max(0, parsed);
+  }
+  return 0;
+};
+
+function normalizeRecapRow(value: unknown): SalesRecapRow | null {
+  if (typeof value !== "object" || value === null) return null;
+  const it = value as Record<string, unknown>;
+  const marketplaceValue =
+    it.marketplace === "Tokopedia" || it.marketplace === "Shopee" || it.marketplace === "TikTok"
+      ? it.marketplace
+      : it.marketplace === "Tokopedia Mall"
+        ? "TikTok"
+        : "Tokopedia";
+
+  const biayaTotal = toSafeNumber(it.ongkir ?? it.biaya);
+  const rawBiayaDetail = it.biayaDetail ?? it.biaya_detail;
+  const biayaDetail = Array.isArray(rawBiayaDetail)
+    ? rawBiayaDetail
+        .map((detail) => {
+          if (typeof detail !== "object" || detail === null) return null;
+          const d = detail as Record<string, unknown>;
+          return {
+            label: typeof d.label === "string" ? d.label : "Biaya",
+            value: toSafeNumber(d.value)
+          } satisfies RecapBiayaItem;
+        })
+        .filter((d): d is RecapBiayaItem => Boolean(d))
+    : [];
+
+  return {
+    id: typeof it.id === "string" ? it.id : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    tanggal: typeof it.tanggal === "string" ? it.tanggal : new Date().toISOString().slice(0, 10),
+    marketplace: marketplaceValue as SalesRecapRow["marketplace"],
+    noPesanan:
+      typeof it.noPesanan === "string"
+        ? it.noPesanan
+        : typeof it.no_pesanan === "string"
+          ? it.no_pesanan
+          : "",
+    pelanggan: typeof it.pelanggan === "string" ? it.pelanggan : "",
+    omzet: toSafeNumber(it.omzet),
+    modal: toSafeNumber(it.modal),
+    ongkir: biayaTotal,
+    biayaDetail: biayaDetail.length ? biayaDetail : [{ label: "Biaya Lain", value: biayaTotal }],
+    catatan: typeof it.catatan === "string" ? it.catatan : ""
+  };
+}
+
+function toRecapDbPayload(row: SalesRecapRow) {
+  return {
+    id: row.id,
+    tanggal: row.tanggal,
+    marketplace: row.marketplace,
+    no_pesanan: row.noPesanan,
+    pelanggan: row.pelanggan,
+    omzet: row.omzet,
+    modal: row.modal,
+    ongkir: row.ongkir,
+    biaya_detail: row.biayaDetail,
+    catatan: row.catatan
+  };
+}
 
 function getLocalDateKey(date = new Date()) {
   const year = date.getFullYear();
@@ -526,64 +594,32 @@ export default function Page() {
   }, [presets]);
 
   useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(RECAP_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
+    let ignore = false;
 
-      const rows: SalesRecapRow[] = parsed
-        .map((item) => {
-          if (typeof item !== "object" || item === null) return null;
-          const it = item as Record<string, unknown>;
-          const marketplaceValue =
-            it.marketplace === "Tokopedia" || it.marketplace === "Shopee" || it.marketplace === "TikTok"
-              ? it.marketplace
-              : it.marketplace === "Tokopedia Mall"
-                ? "TikTok"
-                : "Tokopedia";
-          const biayaTotal = typeof it.ongkir === "number" && Number.isFinite(it.ongkir) ? Math.max(0, it.ongkir) : 0;
-          const biayaDetail = Array.isArray(it.biayaDetail)
-            ? it.biayaDetail
-                .map((detail) => {
-                  if (typeof detail !== "object" || detail === null) return null;
-                  const d = detail as Record<string, unknown>;
-                  return {
-                    label: typeof d.label === "string" ? d.label : "Biaya",
-                    value: typeof d.value === "number" && Number.isFinite(d.value) ? Math.max(0, d.value) : 0
-                  } satisfies RecapBiayaItem;
-                })
-                .filter((d): d is RecapBiayaItem => Boolean(d))
-            : [];
+    const loadRecapRows = async () => {
+      const { data, error } = await supabase
+        .from(RECAP_SUPABASE_TABLE)
+        .select("*")
+        .order("tanggal", { ascending: false });
 
-            return {
-              id: typeof it.id === "string" ? it.id : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-              tanggal: typeof it.tanggal === "string" ? it.tanggal : new Date().toISOString().slice(0, 10),
-              marketplace: marketplaceValue as SalesRecapRow["marketplace"],
-              noPesanan: typeof it.noPesanan === "string" ? it.noPesanan : "",
-              pelanggan: typeof it.pelanggan === "string" ? it.pelanggan : "",
-              omzet: typeof it.omzet === "number" && Number.isFinite(it.omzet) ? Math.max(0, it.omzet) : 0,
-            modal: typeof it.modal === "number" && Number.isFinite(it.modal) ? Math.max(0, it.modal) : 0,
-            ongkir: biayaTotal,
-            biayaDetail: biayaDetail.length ? biayaDetail : [{ label: "Biaya Lain", value: biayaTotal }],
-            catatan: typeof it.catatan === "string" ? it.catatan : ""
-          } satisfies SalesRecapRow;
-        })
+      if (ignore) return;
+      if (error) {
+        setRecapRows([]);
+        setRecapNotice("Gagal memuat rekap dari Supabase. Cek koneksi atau struktur tabel.");
+        return;
+      }
+
+      const rows = (Array.isArray(data) ? data : [])
+        .map((item) => normalizeRecapRow(item))
         .filter((row): row is SalesRecapRow => Boolean(row));
-
       setRecapRows(rows);
-    } catch {
-      setRecapRows([]);
-    }
-  }, []);
+    };
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(RECAP_STORAGE_KEY, JSON.stringify(recapRows));
-    } catch {
-      // ignore write error
-    }
-  }, [recapRows]);
+    void loadRecapRows();
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   const recapOrderTotals = useMemo(() => {
     return recapOrderItems.reduce(
@@ -947,7 +983,7 @@ export default function Page() {
     setRecapOrderItems((prev) => (prev.length > 1 ? prev.filter((item) => item.id !== id) : prev));
   }
 
-  function addRecapRow() {
+  async function addRecapRow() {
     const totalBiaya =
       recapMarketplace === "Shopee"
         ? recapShopeeTotalBiaya
@@ -986,7 +1022,14 @@ export default function Page() {
       catatan: recapCatatan
     };
 
+    const { error } = await supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]);
+    if (error) {
+      setRecapNotice("Gagal menyimpan rekap ke Supabase.");
+      return false;
+    }
+
     setRecapRows((prev) => [row, ...prev]);
+    setRecapNotice("Data rekap berhasil disimpan ke Supabase.");
     setRecapNoPesanan("");
     setRecapPelanggan("");
     setRecapOmzet(0);
@@ -1005,12 +1048,20 @@ export default function Page() {
     setRecapShopeeKomisiAmsAktif(false);
     setRecapShopeeBiayaKomisiAms(0);
     setRecapCatatan("");
+    return true;
   }
 
-  function deleteRecapRow(id: string) {
+  async function deleteRecapRow(id: string) {
+    const { error } = await supabase.from(RECAP_SUPABASE_TABLE).delete().eq("id", id);
+    if (error) {
+      setRecapNotice("Gagal menghapus data rekap di Supabase.");
+      return;
+    }
+
     setRecapRows((prev) => prev.filter((row) => row.id !== id));
     setOpenBiayaDetailRow((prev) => (prev && prev.id === id ? null : prev));
     setEditRecapDraft((prev) => (prev && prev.id === id ? null : prev));
+    setRecapNotice("Data rekap berhasil dihapus.");
   }
 
   function openEditRecap(row: SalesRecapRow) {
@@ -1056,7 +1107,7 @@ export default function Page() {
     });
   }
 
-  function saveEditRecap() {
+  async function saveEditRecap() {
     if (!editRecapDraft) return;
 
     const sanitizedBiayaDetail = editRecapDraft.biayaDetail
@@ -1082,10 +1133,19 @@ export default function Page() {
       catatan: editRecapDraft.catatan
     };
 
+    const { error } = await supabase
+      .from(RECAP_SUPABASE_TABLE)
+      .update(toRecapDbPayload(updatedRow))
+      .eq("id", updatedRow.id);
+    if (error) {
+      setRecapNotice("Gagal memperbarui data rekap di Supabase.");
+      return;
+    }
+
     setRecapRows((prev) => prev.map((row) => (row.id === updatedRow.id ? updatedRow : row)));
     setOpenBiayaDetailRow((prev) => (prev && prev.id === updatedRow.id ? updatedRow : prev));
     setEditRecapDraft(null);
-    setRecapNotice("Data rekap berhasil diperbarui.");
+    setRecapNotice("Data rekap berhasil diperbarui di Supabase.");
   }
 
   function exportRecapPdf() {
@@ -2159,7 +2219,7 @@ export default function Page() {
           </div>
 
           <div className="mt-3 flex justify-end">
-            <button type="button" onClick={() => { addRecapRow(); setRecapMenu("hasil"); }} className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800">
+            <button type="button" onClick={async () => { const ok = await addRecapRow(); if (ok) setRecapMenu("hasil"); }} className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800">
               Tambah Rekap & Lihat Hasil
             </button>
           </div>
