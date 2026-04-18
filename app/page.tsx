@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { supabase } from "./supabaseClient";
 
 type ShopeeOngkirMode =
@@ -98,11 +98,32 @@ type SalesRecapRow = {
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
-const MARKETPLACE_BAR_COLOR: Record<SalesRecapRow["marketplace"], string> = {
-  Tokopedia: "bg-emerald-500",
-  Shopee: "bg-orange-500",
-  TikTok: "bg-sky-500"
-};
+const MARKETPLACE_VISUAL = {
+  tokopedia: {
+    label: "Tokopedia",
+    short: "TKP",
+    gradient: "from-emerald-500/20 via-emerald-400/10 to-transparent",
+    badge: "bg-emerald-500 text-white",
+    ring: "ring-emerald-200/70",
+    text: "text-emerald-700"
+  },
+  shopee: {
+    label: "Shopee",
+    short: "SHP",
+    gradient: "from-orange-500/20 via-orange-400/10 to-transparent",
+    badge: "bg-orange-500 text-white",
+    ring: "ring-orange-200/70",
+    text: "text-orange-700"
+  },
+  mall: {
+    label: "Tokopedia Mall",
+    short: "MALL",
+    gradient: "from-sky-500/20 via-cyan-400/10 to-transparent",
+    badge: "bg-sky-500 text-white",
+    ring: "ring-sky-200/70",
+    text: "text-sky-700"
+  }
+} as const;
 
 const DEFAULT_PRESET_DATA: PresetData = {
   tokopediaFee: "4.75",
@@ -126,6 +147,38 @@ const rupiah = (num: number) => `Rp ${Math.round(num).toLocaleString("id-ID")}`;
 const rupiahOrDash = (num: number) => (Number.isFinite(num) ? rupiah(num) : "-");
 const cap = (value: number, max: number) => Math.min(value, max);
 const percent = (value: number, pct: number) => value * (pct / 100);
+const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const createRecapRowId = () =>
+  typeof globalThis !== "undefined" && globalThis.crypto && "randomUUID" in globalThis.crypto
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+function isTemporarySupabaseError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const e = error as Record<string, unknown>;
+  const statusRaw = e.status;
+  const status = typeof statusRaw === "number" ? statusRaw : Number(statusRaw || 0);
+  if (status === 408 || status === 425 || status === 429 || status >= 500) return true;
+
+  const code = String(e.code ?? "").toUpperCase();
+  const message = String(e.message ?? "").toLowerCase();
+  return (
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    message.includes("network") ||
+    message.includes("fetch") ||
+    message.includes("timeout") ||
+    message.includes("tempor")
+  );
+}
+
+function isDuplicateIdError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const e = error as Record<string, unknown>;
+  const code = String(e.code ?? "").toUpperCase();
+  const message = String(e.message ?? "").toLowerCase();
+  return code === "23505" || (message.includes("duplicate") && message.includes("id"));
+}
 const toSafeNumber = (value: unknown) => {
   if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, value);
   if (typeof value === "string") {
@@ -484,9 +537,9 @@ function ToggleRow({
 }
 
 export default function Page() {
-  const [harga, setHarga] = useState(100000);
-  const [modal, setModal] = useState(65000);
-  const [targetMargin, setTargetMargin] = useState(20);
+  const [harga, setHarga] = useState(0);
+  const [modal, setModal] = useState(0);
+  const [targetMargin, setTargetMargin] = useState(0);
 
   const [tokopediaFee, setTokopediaFee] = useState("4.75");
   const [shopeeFee, setShopeeFee] = useState("5.25");
@@ -537,6 +590,8 @@ export default function Page() {
   const [recapMarketplaceBiayaKomisiPlatform, setRecapMarketplaceBiayaKomisiPlatform] = useState(0);
   const [recapMarketplaceBiayaLayananMall, setRecapMarketplaceBiayaLayananMall] = useState(0);
   const [recapMarketplaceKomisiDinamis, setRecapMarketplaceKomisiDinamis] = useState(0);
+  const [recapMarketplaceKomisiAfiliasiAktif, setRecapMarketplaceKomisiAfiliasiAktif] = useState(false);
+  const [recapMarketplaceKomisiAfiliasi, setRecapMarketplaceKomisiAfiliasi] = useState(0);
   const [recapMarketplaceBiayaPemrosesanPesanan, setRecapMarketplaceBiayaPemrosesanPesanan] = useState(0);
   const [recapShopeeBiayaAdmin, setRecapShopeeBiayaAdmin] = useState(0);
   const [recapShopeeBiayaLayananPromoXtra, setRecapShopeeBiayaLayananPromoXtra] = useState(0);
@@ -552,6 +607,9 @@ export default function Page() {
   const [recapFilterEndDate, setRecapFilterEndDate] = useState("");
   const [recapFilterQuery, setRecapFilterQuery] = useState("");
   const [recapNotice, setRecapNotice] = useState("");
+  const [isRecapSaving, setIsRecapSaving] = useState(false);
+  const [recapSyncStatus, setRecapSyncStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
+  const [recapSyncMessage, setRecapSyncMessage] = useState("");
   const [recapMenu, setRecapMenu] = useState<"input" | "hasil">("input");
   const [openBiayaDetailRow, setOpenBiayaDetailRow] = useState<SalesRecapRow | null>(null);
   const [editRecapDraft, setEditRecapDraft] = useState<RecapEditDraft | null>(null);
@@ -574,6 +632,24 @@ export default function Page() {
     mallAfiliasiPct
   };
 
+  const loadRecapRows = useCallback(async () => {
+    const { data, error } = await supabase
+      .from(RECAP_SUPABASE_TABLE)
+      .select("*")
+      .order("tanggal", { ascending: false });
+
+    if (error) {
+      setRecapRows([]);
+      setRecapNotice("Gagal memuat rekap dari Supabase. Cek koneksi atau struktur tabel.");
+      return;
+    }
+
+    const rows = (Array.isArray(data) ? data : [])
+      .map((item) => normalizeRecapRow(item))
+      .filter((row): row is SalesRecapRow => Boolean(row));
+    setRecapRows(rows);
+  }, []);
+
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(PRESET_STORAGE_KEY);
@@ -594,32 +670,31 @@ export default function Page() {
   }, [presets]);
 
   useEffect(() => {
-    let ignore = false;
-
-    const loadRecapRows = async () => {
-      const { data, error } = await supabase
-        .from(RECAP_SUPABASE_TABLE)
-        .select("*")
-        .order("tanggal", { ascending: false });
-
-      if (ignore) return;
-      if (error) {
-        setRecapRows([]);
-        setRecapNotice("Gagal memuat rekap dari Supabase. Cek koneksi atau struktur tabel.");
-        return;
-      }
-
-      const rows = (Array.isArray(data) ? data : [])
-        .map((item) => normalizeRecapRow(item))
-        .filter((row): row is SalesRecapRow => Boolean(row));
-      setRecapRows(rows);
-    };
-
     void loadRecapRows();
+  }, [loadRecapRows]);
+
+  useEffect(() => {
+    if (activeSection !== "rekap-penjualan") return;
+
+    const channel = supabase
+      .channel(`recap-realtime-${RECAP_SUPABASE_TABLE}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: RECAP_SUPABASE_TABLE
+        },
+        () => {
+          void loadRecapRows();
+        }
+      )
+      .subscribe();
+
     return () => {
-      ignore = true;
+      void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [activeSection, loadRecapRows]);
 
   const recapOrderTotals = useMemo(() => {
     return recapOrderItems.reduce(
@@ -636,6 +711,27 @@ export default function Page() {
     setRecapOmzet(recapOrderTotals.omzet);
     setRecapModal(recapOrderTotals.modal);
   }, [recapOrderTotals]);
+
+  async function runSupabaseWithRetry<T>(
+    task: () => PromiseLike<{ data: T; error: unknown }>,
+    maxRetry = 2
+  ) {
+    let lastResult: { data: T; error: unknown } | null = null;
+
+    for (let attempt = 0; attempt <= maxRetry; attempt += 1) {
+      const result = await task();
+      if (!result.error) return result;
+      lastResult = result;
+
+      if (!isTemporarySupabaseError(result.error) || attempt === maxRetry) {
+        return result;
+      }
+
+      await waitMs(500 * (attempt + 1));
+    }
+
+    return lastResult ?? { data: null as T, error: { message: "Unknown error" } };
+  }
 
   function applyPreset(data: PresetData) {
     setTokopediaFee(data.tokopediaFee);
@@ -984,6 +1080,13 @@ export default function Page() {
   }
 
   async function addRecapRow() {
+    if (isRecapSaving) return false;
+
+    setIsRecapSaving(true);
+    setRecapSyncStatus("saving");
+    setRecapSyncMessage("Menyimpan ke Supabase...");
+
+    const komisiAfiliasiMarketplace = recapMarketplaceKomisiAfiliasiAktif ? recapMarketplaceKomisiAfiliasi : 0;
     const totalBiaya =
       recapMarketplace === "Shopee"
         ? recapShopeeTotalBiaya
@@ -1005,12 +1108,13 @@ export default function Page() {
               { label: "Biaya Komisi Platform", value: recapMarketplaceBiayaKomisiPlatform },
               { label: "Biaya Layanan Mall", value: recapMarketplaceBiayaLayananMall },
               { label: "Komisi Dinamis", value: recapMarketplaceKomisiDinamis },
+              { label: "Komisi Afiliasi", value: komisiAfiliasiMarketplace },
               { label: "Biaya Pemrosesan Pesanan", value: recapMarketplaceBiayaPemrosesanPesanan }
             ].filter((item) => item.value > 0)
           : [{ label: "Biaya Lain", value: recapOngkir }];
 
-    const row: SalesRecapRow = {
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    let row: SalesRecapRow = {
+      id: createRecapRowId(),
       tanggal: recapTanggal,
       marketplace: recapMarketplace,
       noPesanan: recapNoPesanan,
@@ -1022,13 +1126,26 @@ export default function Page() {
       catatan: recapCatatan
     };
 
-    const { error } = await supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]);
-    if (error) {
+    let insertResult = await runSupabaseWithRetry(() => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]), 2);
+    if (insertResult.error && isDuplicateIdError(insertResult.error)) {
+      row = { ...row, id: createRecapRowId() };
+      insertResult = await runSupabaseWithRetry(
+        () => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]),
+        1
+      );
+    }
+
+    if (insertResult.error) {
+      setRecapSyncStatus("error");
+      setRecapSyncMessage("Gagal sinkronisasi. Coba lagi.");
       setRecapNotice("Gagal menyimpan rekap ke Supabase.");
+      setIsRecapSaving(false);
       return false;
     }
 
     setRecapRows((prev) => [row, ...prev]);
+    setRecapSyncStatus("success");
+    setRecapSyncMessage("Tersimpan ke Supabase.");
     setRecapNotice("Data rekap berhasil disimpan ke Supabase.");
     setRecapNoPesanan("");
     setRecapPelanggan("");
@@ -1039,6 +1156,8 @@ export default function Page() {
     setRecapMarketplaceBiayaKomisiPlatform(0);
     setRecapMarketplaceBiayaLayananMall(0);
     setRecapMarketplaceKomisiDinamis(0);
+    setRecapMarketplaceKomisiAfiliasiAktif(false);
+    setRecapMarketplaceKomisiAfiliasi(0);
     setRecapMarketplaceBiayaPemrosesanPesanan(0);
     setRecapShopeeBiayaAdmin(0);
     setRecapShopeeBiayaLayananPromoXtra(0);
@@ -1048,11 +1167,15 @@ export default function Page() {
     setRecapShopeeKomisiAmsAktif(false);
     setRecapShopeeBiayaKomisiAms(0);
     setRecapCatatan("");
+    setIsRecapSaving(false);
     return true;
   }
 
   async function deleteRecapRow(id: string) {
-    const { error } = await supabase.from(RECAP_SUPABASE_TABLE).delete().eq("id", id);
+    const { error } = await runSupabaseWithRetry(
+      () => supabase.from(RECAP_SUPABASE_TABLE).delete().eq("id", id),
+      2
+    );
     if (error) {
       setRecapNotice("Gagal menghapus data rekap di Supabase.");
       return;
@@ -1133,10 +1256,14 @@ export default function Page() {
       catatan: editRecapDraft.catatan
     };
 
-    const { error } = await supabase
-      .from(RECAP_SUPABASE_TABLE)
-      .update(toRecapDbPayload(updatedRow))
-      .eq("id", updatedRow.id);
+    const { error } = await runSupabaseWithRetry(
+      () =>
+        supabase
+          .from(RECAP_SUPABASE_TABLE)
+          .update(toRecapDbPayload(updatedRow))
+          .eq("id", updatedRow.id),
+      2
+    );
     if (error) {
       setRecapNotice("Gagal memperbarui data rekap di Supabase.");
       return;
@@ -1436,31 +1563,76 @@ export default function Page() {
   ]);
 
   const recapMarketplaceTotalBiaya = useMemo(() => {
+    const komisiAfiliasiMarketplace = recapMarketplaceKomisiAfiliasiAktif ? recapMarketplaceKomisiAfiliasi : 0;
     return (
       recapMarketplaceBiayaKomisiPlatform +
       recapMarketplaceBiayaLayananMall +
       recapMarketplaceKomisiDinamis +
+      komisiAfiliasiMarketplace +
       recapMarketplaceBiayaPemrosesanPesanan
     );
   }, [
     recapMarketplaceBiayaKomisiPlatform,
     recapMarketplaceBiayaLayananMall,
     recapMarketplaceKomisiDinamis,
+    recapMarketplaceKomisiAfiliasiAktif,
+    recapMarketplaceKomisiAfiliasi,
     recapMarketplaceBiayaPemrosesanPesanan
   ]);
 
-  const recapChartData = useMemo(() => {
-    const items = (Object.keys(recapByMarketplace) as SalesRecapRow["marketplace"][]).map((name) => ({
-      name,
-      omzet: recapByMarketplace[name].omzet
-    }));
-    const maxOmzet = items.reduce((highest, item) => Math.max(highest, item.omzet), 0);
+  const recapLineChart = useMemo(() => {
+    const omzetByDate = new Map<string, number>();
+    for (const row of recapRows) {
+      const prev = omzetByDate.get(row.tanggal) ?? 0;
+      omzetByDate.set(row.tanggal, prev + row.omzet);
+    }
 
-    return items.map((item) => ({
-      ...item,
-      widthPct: maxOmzet > 0 ? Math.max(6, Math.round((item.omzet / maxOmzet) * 100)) : 0
-    }));
-  }, [recapByMarketplace]);
+    const sorted = Array.from(omzetByDate.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const recent = sorted.slice(-7);
+    const values = recent.map((item) => item[1]);
+    const labels = recent.map((item) => item[0].slice(5));
+    const maxValue = Math.max(...values, 1);
+
+    const width = 680;
+    const height = 190;
+    const padX = 24;
+    const padY = 22;
+
+    const points = recent.map((item, index) => {
+      const x =
+        recent.length <= 1
+          ? width / 2
+          : padX + (index * (width - padX * 2)) / (recent.length - 1);
+      const y = height - padY - (item[1] / maxValue) * (height - padY * 2);
+      return { x, y, value: item[1], date: item[0] };
+    });
+
+    const linePath = points
+      .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+      .join(" ");
+
+    const areaPath = points.length
+      ? `${linePath} L ${points[points.length - 1].x.toFixed(2)} ${(height - padY).toFixed(2)} L ${points[0].x.toFixed(2)} ${(height - padY).toFixed(2)} Z`
+      : "";
+
+    const latestValue = values.length ? values[values.length - 1] : 0;
+    const previousValue = values.length > 1 ? values[values.length - 2] : latestValue;
+    const deltaPct =
+      previousValue > 0 ? ((latestValue - previousValue) / previousValue) * 100 : latestValue > 0 ? 100 : 0;
+
+    return {
+      width,
+      height,
+      padY,
+      points,
+      linePath,
+      areaPath,
+      labels,
+      latestValue,
+      deltaPct,
+      hasData: points.length > 0
+    };
+  }, [recapRows]);
 
   const hasil = useMemo(() => {
     if (harga <= 0 || modal <= 0) {
@@ -1596,25 +1768,150 @@ export default function Page() {
     mallAfiliasiPct
   ]);
 
+  const marketplaceHighlights = [
+    {
+      key: "tokopedia",
+      title: MARKETPLACE_VISUAL.tokopedia.label,
+      subtitle: "Marketplace stabil untuk jaga margin",
+      net: hasil.tokopedia.net,
+      margin: hasil.marginTokopedia,
+      pct: hasil.pctTokopedia,
+      rekom: hasil.rekomTokopedia
+    },
+    {
+      key: "shopee",
+      title: MARKETPLACE_VISUAL.shopee.label,
+      subtitle: "Komponen promo paling fleksibel",
+      net: hasil.shopee.net,
+      margin: hasil.marginShopee,
+      pct: hasil.pctShopee,
+      rekom: hasil.rekomShopee
+    },
+    {
+      key: "mall",
+      title: MARKETPLACE_VISUAL.mall.label,
+      subtitle: "Cocok untuk branding official store",
+      net: hasil.mall.net,
+      margin: hasil.marginMall,
+      pct: hasil.pctMall,
+      rekom: hasil.rekomMall
+    }
+  ] as const;
+
+  const tokopediaFeatureCount = Number(tokopediaGratisOngkir) + Number(tokopediaAfiliasiAktif);
+  const shopeeFeatureCount =
+    Number(shopeeGratisOngkir !== "off") +
+    Number(shopeePromo) +
+    Number(shopeeAsuransi) +
+    Number(shopeeAfiliasiAktif);
+  const mallFeatureCount = Number(mallBiayaJasa) + Number(mallGratisOngkir) + Number(mallAfiliasiAktif);
+  const sectionMeta: Record<
+    SectionId,
+    { title: string; subtitle: string; tone: string; chip: string; dot: string; badge: string; stats: string[] }
+  > = {
+    "kalkulator-potongan": {
+      title: "Mode Kalkulator Aktif",
+      subtitle: "Bandingkan margin dan net profit antar marketplace secara real-time.",
+      tone: "from-emerald-50 to-white",
+      chip: "bg-emerald-100 text-emerald-700",
+      dot: "bg-emerald-500",
+      badge: "Kalkulator",
+      stats: [
+        `Paling menguntungkan: ${hasil.best.name}`,
+        `Target net: ${rupiah(hasil.targetNet)}`,
+        `Harga jual aktif: ${rupiah(harga)}`
+      ]
+    },
+    "pembuatan-nota": {
+      title: "Mode Nota/Faktur Aktif",
+      subtitle: "Siapkan invoice cepat dengan data pembeli, item, dan ringkasan total.",
+      tone: "from-orange-50 to-white",
+      chip: "bg-orange-100 text-orange-700",
+      dot: "bg-orange-500",
+      badge: "Nota/Faktur",
+      stats: [
+        `Jumlah item: ${invoiceItems.length}`,
+        `Pembeli: ${invoiceBuyer || "-"}`,
+        `Tanggal nota: ${invoiceDate || "-"}`
+      ]
+    },
+    "rekap-penjualan": {
+      title: "Mode Rekap Penjualan Aktif",
+      subtitle: "Pantau transaksi, omzet, biaya, dan laba seluruh marketplace.",
+      tone: "from-sky-50 to-white",
+      chip: "bg-sky-100 text-sky-700",
+      dot: "bg-sky-500",
+      badge: "Rekap",
+      stats: [
+        `Total transaksi: ${recapSummary.transaksi}`,
+        `Total omzet: ${rupiah(recapSummary.omzet)}`,
+        `Laba bersih: ${rupiah(recapSummary.laba)}`
+      ]
+    }
+  };
+  const activeMeta = sectionMeta[activeSection];
+
   return (
-    <main className="animate-fade-up mx-auto my-8 w-[94vw] max-w-[1280px]">
-      <header className="mb-4 rounded-2xl border border-stone-200 bg-white/85 px-4 py-3 text-center shadow-sm backdrop-blur-md">
-        <h1 className="text-lg font-semibold tracking-tight text-slate-800 md:text-2xl">
-          Sistem Pembantu Penjualan Marketplace
-        </h1>
+    <main className="animate-fade-up relative mx-auto my-6 w-[94vw] max-w-[1320px] overflow-hidden">
+      <div className="animate-float-soft pointer-events-none absolute -left-20 top-0 h-72 w-72 rounded-full bg-emerald-300/20 blur-3xl" />
+      <div className="animate-float-soft pointer-events-none absolute -right-20 top-20 h-72 w-72 rounded-full bg-orange-300/20 blur-3xl" style={{ animationDelay: "1.2s" }} />
+      <div className="animate-float-soft pointer-events-none absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-sky-300/20 blur-3xl" style={{ animationDelay: "2.1s" }} />
+
+      <header className="relative mb-4 overflow-hidden rounded-3xl border border-stone-200 bg-white/85 px-4 py-4 shadow-sm backdrop-blur-md md:px-6">
+        <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-gradient-to-l from-stone-100/80 to-transparent md:block" />
+        <div className="relative z-10 flex flex-col gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Starcomp Sales Toolkit</p>
+            <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-3xl">
+              Sistem Pembantu Penjualan 3 Marketplace
+            </h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Simulasi biaya Tokopedia, Shopee, dan Tokopedia Mall dalam satu dashboard yang lebih dinamis.
+            </p>
+          </div>
+          {activeSection === "kalkulator-potongan" ? (
+            <div className="grid gap-2 md:grid-cols-3">
+              {marketplaceHighlights.map((item, index) => {
+                const visual = MARKETPLACE_VISUAL[item.key];
+                return (
+                  <div
+                    key={`top-highlight-${item.key}`}
+                    className={`animate-sweep-in relative overflow-hidden rounded-2xl border border-white/80 bg-white/90 p-3 ring-1 ${visual.ring}`}
+                    style={{ animationDelay: `${index * 90}ms` }}
+                  >
+                    <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${visual.gradient}`} />
+                    <div className="relative">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className={`rounded-lg px-2 py-0.5 text-[10px] font-bold tracking-[0.14em] ${visual.badge}`}>
+                          {visual.short}
+                        </span>
+                        <span className="text-[11px] text-slate-500">{item.pct.toFixed(2)}%</span>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                      <p className="text-[11px] text-slate-600">{item.subtitle}</p>
+                      <p className={`mt-2 text-sm font-semibold ${visual.text}`}>Margin: {rupiah(item.margin)}</p>
+                      <p className="text-[11px] text-slate-600">Net: {rupiah(item.net)}</p>
+                      <p className="text-[11px] text-slate-500">Rekomendasi: {rupiahOrDash(item.rekom)}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
       </header>
 
-      <div className="grid gap-4 lg:grid-cols-[240px_1fr]">
+      <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
         <aside className="card-shell h-fit p-3 lg:sticky lg:top-4">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Menu</p>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
           <nav className="grid gap-2 text-sm">
             <button
               type="button"
               onClick={() => setActiveSection("kalkulator-potongan")}
-              className={`rounded-xl border px-3 py-2 font-medium transition ${
+              className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
                 activeSection === "kalkulator-potongan"
-                  ? "border-stone-700 bg-slate-900 text-white"
-                  : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
               }`}
             >
               Kalkulator Potongan
@@ -1622,10 +1919,10 @@ export default function Page() {
             <button
               type="button"
               onClick={() => setActiveSection("pembuatan-nota")}
-              className={`rounded-xl border px-3 py-2 font-medium transition ${
+              className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
                 activeSection === "pembuatan-nota"
-                  ? "border-stone-700 bg-slate-900 text-white"
-                  : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
+                  ? "border-orange-300 bg-orange-50 text-orange-700"
+                  : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
               }`}
             >
               Pembuatan Nota/Faktur
@@ -1633,55 +1930,141 @@ export default function Page() {
             <button
               type="button"
               onClick={() => setActiveSection("rekap-penjualan")}
-              className={`rounded-xl border px-3 py-2 font-medium transition ${
+              className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
                 activeSection === "rekap-penjualan"
-                  ? "border-stone-700 bg-slate-900 text-white"
-                  : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
+                  ? "border-sky-300 bg-sky-50 text-sky-700"
+                  : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
               }`}
             >
               Rekap Penjualan Marketplace
             </button>
           </nav>
-          {activeSection === "rekap-penjualan" ? (
-            <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Grafik Penjualan</p>
-              {recapSummary.transaksi > 0 ? (
-                <div className="mt-2 space-y-2">
-                  {recapChartData.map((item) => (
-                    <div key={item.name} className="space-y-1">
-                      <div className="flex items-center justify-between text-[11px] text-slate-600">
-                        <span className="font-medium text-slate-700">{item.name}</span>
-                        <span>{rupiah(item.omzet)}</span>
-                      </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-stone-200">
-                        <div
-                          className={`h-full rounded-full ${MARKETPLACE_BAR_COLOR[item.name]}`}
-                          style={{ width: `${item.widthPct}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-2 text-xs text-slate-500">Belum ada data rekap untuk ditampilkan.</p>
-              )}
-              <div className="mt-3 grid gap-1 text-xs text-slate-600">
-                <p>Total transaksi: <strong className="text-slate-800">{recapSummary.transaksi}</strong></p>
-                <p>Total omzet: <strong className="text-slate-800">{rupiah(recapSummary.omzet)}</strong></p>
-              </div>
-            </div>
-          ) : null}
         </aside>
 
         <div className="space-y-5">
-          {activeSection === "kalkulator-potongan" ? (
-          <section id="kalkulator-potongan" className="grid gap-4 lg:grid-cols-[1.05fr_1fr]">
-        <article className="card-shell p-5">
-          <h2 className="mb-4 flex items-center gap-2 text-base font-bold">
-            <span className="h-2 w-2 rounded-full bg-stone-500" /> Data Produk & Fee
-          </h2>
+          {activeSection === "rekap-penjualan" ? (
+          <section className="animate-sweep-in card-shell border border-sky-200/70 bg-gradient-to-r from-sky-50/80 via-white to-emerald-50/70 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">Grafik Penjualan Harian</p>
+                <p className="text-sm font-semibold text-slate-900">Omzet 7 Hari Terakhir (Realtime)</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-700">
+                  Realtime ON
+                </span>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                    recapLineChart.deltaPct >= 0 ? "bg-sky-100 text-sky-700" : "bg-rose-100 text-rose-700"
+                  }`}
+                >
+                  {recapLineChart.deltaPct >= 0 ? "+" : ""}
+                  {recapLineChart.deltaPct.toFixed(1)}%
+                </span>
+              </div>
+            </div>
 
-          <div className="mb-4 rounded-2xl border border-stone-200 bg-stone-50/85 p-3">
+            {recapLineChart.hasData ? (
+              <div className="overflow-x-auto rounded-2xl border border-sky-100 bg-white/85 p-2">
+                <svg viewBox={`0 0 ${recapLineChart.width} ${recapLineChart.height}`} className="h-52 w-full min-w-[640px]">
+                  <defs>
+                    <linearGradient id="lineAreaFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.28" />
+                      <stop offset="100%" stopColor="#0ea5e9" stopOpacity="0.03" />
+                    </linearGradient>
+                  </defs>
+
+                  <line
+                    x1="24"
+                    y1={recapLineChart.height - recapLineChart.padY}
+                    x2={recapLineChart.width - 24}
+                    y2={recapLineChart.height - recapLineChart.padY}
+                    stroke="#cbd5e1"
+                    strokeDasharray="4 4"
+                  />
+
+                  {recapLineChart.areaPath ? (
+                    <path d={recapLineChart.areaPath} fill="url(#lineAreaFill)" />
+                  ) : null}
+                  {recapLineChart.linePath ? (
+                    <path d={recapLineChart.linePath} fill="none" stroke="#0ea5e9" strokeWidth="3" strokeLinecap="round" />
+                  ) : null}
+
+                  {recapLineChart.points.map((point) => (
+                    <g key={`line-point-${point.date}`}>
+                      <circle cx={point.x} cy={point.y} r="4.5" fill="#fff" stroke="#0284c7" strokeWidth="2" />
+                      <text x={point.x} y={point.y - 10} textAnchor="middle" fontSize="10" fill="#0f172a">
+                        {Math.round(point.value / 1000)}k
+                      </text>
+                    </g>
+                  ))}
+                </svg>
+
+                <div
+                  className="mt-2 grid gap-1 text-center text-[11px] text-slate-500"
+                  style={{ gridTemplateColumns: `repeat(${Math.max(recapLineChart.labels.length, 1)}, minmax(0, 1fr))` }}
+                >
+                  {recapLineChart.labels.map((label) => (
+                    <span key={`line-label-${label}`}>{label}</span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-sky-100 bg-white/85 px-3 py-8 text-center text-sm text-slate-500">
+                Belum ada data penjualan untuk ditampilkan di grafik garis.
+              </div>
+            )}
+
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                Omzet Hari Terakhir
+                <p className="font-semibold text-slate-900">{rupiah(recapLineChart.latestValue)}</p>
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                Total Transaksi
+                <p className="font-semibold text-slate-900">{recapSummary.transaksi}</p>
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                Total Omzet
+                <p className="font-semibold text-slate-900">{rupiah(recapSummary.omzet)}</p>
+              </div>
+            </div>
+          </section>
+          ) : null}
+
+          <section
+            key={`section-meta-${activeSection}`}
+            className={`animate-sweep-in rounded-3xl border border-stone-200 bg-gradient-to-r p-4 ${activeMeta.tone}`}
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                  <span className={`h-2 w-2 rounded-full ${activeMeta.dot} animate-pulse-soft`} />
+                  {activeMeta.title}
+                </p>
+                <p className="mt-1 text-xs text-slate-600">{activeMeta.subtitle}</p>
+              </div>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${activeMeta.chip}`}>
+                {activeMeta.badge}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              {activeMeta.stats.map((stat) => (
+                <div key={stat} className="rounded-2xl border border-white/70 bg-white/70 px-3 py-2 text-xs text-slate-700">
+                  {stat}
+                </div>
+              ))}
+            </div>
+          </section>
+          {activeSection === "kalkulator-potongan" ? (
+          <section id="kalkulator-potongan" className="animate-sweep-in grid gap-4 lg:grid-cols-[1.08fr_1fr]">
+        <article className="card-shell p-5">
+          <h2 className="mb-1 flex items-center gap-2 text-base font-bold text-slate-900">
+            <span className="h-2 w-2 rounded-full bg-emerald-500" /> Data Produk, Fee, dan Fitur Marketplace
+          </h2>
+          <p className="mb-4 text-xs text-slate-500">Atur parameter utama, lalu bandingkan performa tiap channel penjualan.</p>
+
+          <div className="mb-4 rounded-2xl border border-stone-200 bg-gradient-to-br from-stone-100/70 to-white p-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Preset Potongan</p>
             <div className="grid gap-2 md:grid-cols-[1fr_auto]">
               <input
@@ -1772,8 +2155,11 @@ export default function Page() {
           </div>
 
           <div className="mt-4 grid gap-2.5">
-            <div className="grid gap-2 rounded-2xl border border-stone-200 bg-stone-50/85 p-3">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Tokopedia</h3>
+            <div className="grid gap-2 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Tokopedia</h3>
+                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">{tokopediaFeatureCount} fitur aktif</span>
+              </div>
               <ToggleRow title="Gratis Ongkir Tokopedia" subtitle="4% (maks Rp 40.000)">
                 <input type="checkbox" checked={tokopediaGratisOngkir} onChange={(e) => setTokopediaGratisOngkir(e.target.checked)} className="h-4 w-4 accent-stone-700" />
               </ToggleRow>
@@ -1786,8 +2172,11 @@ export default function Page() {
               </ToggleRow>
             </div>
 
-            <div className="grid gap-2 rounded-2xl border border-stone-200 bg-stone-50/85 p-3">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Shopee</h3>
+            <div className="grid gap-2 rounded-2xl border border-orange-200 bg-gradient-to-br from-orange-50 to-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-orange-700">Shopee</h3>
+                <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">{shopeeFeatureCount} fitur aktif</span>
+              </div>
               <ToggleRow title="Gratis Ongkir Shopee" subtitle="Pilih kategori dan persentase">
                 <select value={shopeeGratisOngkir} onChange={(e) => setShopeeGratisOngkir(e.target.value as ShopeeOngkirMode)} className="w-[220px] rounded-xl border border-stone-200 px-2 py-1 text-sm outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
                   <option value="off">Tidak aktif</option>
@@ -1820,8 +2209,11 @@ export default function Page() {
               </ToggleRow>
             </div>
 
-            <div className="grid gap-2 rounded-2xl border border-stone-200 bg-stone-50/85 p-3">
-              <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Tokopedia Mall</h3>
+            <div className="grid gap-2 rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Tokopedia Mall</h3>
+                <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">{mallFeatureCount} fitur aktif</span>
+              </div>
               <ToggleRow title="Biaya Jasa Tokopedia Mall" subtitle="1.8% (maks Rp 50.000)">
                 <input type="checkbox" checked={mallBiayaJasa} onChange={(e) => setMallBiayaJasa(e.target.checked)} className="h-4 w-4 accent-stone-700" />
               </ToggleRow>
@@ -1855,7 +2247,7 @@ export default function Page() {
             </div>
           )}
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-base font-bold">Hasil Simulasi</h2>
+            <h2 className="text-base font-bold text-slate-900">Hasil Simulasi Marketplace</h2>
             <p className="text-sm text-slate-600">
               Biaya proses semua marketplace: <strong>Rp 1.250</strong>
             </p>
@@ -1866,8 +2258,28 @@ export default function Page() {
             { key: "shopee", title: "Shopee", data: hasil.shopee },
             { key: "mall", title: "Tokopedia Mall", data: hasil.mall }
           ].map((m) => (
-            <section key={m.key} className="mb-2 rounded-2xl border border-stone-200 bg-stone-50/80 p-3 transition hover:border-stone-300 hover:shadow-sm">
-              <h3 className="mb-2 text-sm font-bold">{m.title}</h3>
+            <section
+              key={m.key}
+              className={`mb-2 rounded-2xl border bg-white/90 p-3 ring-1 transition hover:shadow-sm ${
+                m.key === "tokopedia"
+                  ? "border-emerald-200 ring-emerald-200/60"
+                  : m.key === "shopee"
+                    ? "border-orange-200 ring-orange-200/60"
+                    : "border-sky-200 ring-sky-200/60"
+              }`}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="text-sm font-bold text-slate-900">{m.title}</h3>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                    m.data.net >= hasil.targetNet
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-rose-100 text-rose-700"
+                  }`}
+                >
+                  {m.data.net >= hasil.targetNet ? "Target tercapai" : "Di bawah target"}
+                </span>
+              </div>
               <ul className="grid gap-1 text-sm text-slate-600">
                 {m.key === "shopee" ? (
                   <li className="flex justify-between gap-2"><span>Potongan Tetap</span><strong className="tabular-nums text-slate-900">Rp 350</strong></li>
@@ -1881,6 +2293,24 @@ export default function Page() {
                   </strong>
                 </li>
               </ul>
+              <div className="mt-2">
+                <div className="mb-1 flex items-center justify-between text-[11px] text-slate-500">
+                  <span>Progress ke target net</span>
+                  <span>{Math.min(100, Math.max(0, (m.data.net / Math.max(hasil.targetNet, 1)) * 100)).toFixed(0)}%</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-stone-200">
+                  <div
+                    className={`h-full rounded-full ${
+                      m.key === "tokopedia"
+                        ? "bg-emerald-500"
+                        : m.key === "shopee"
+                          ? "bg-orange-500"
+                          : "bg-sky-500"
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, (m.data.net / Math.max(hasil.targetNet, 1)) * 100))}%` }}
+                  />
+                </div>
+              </div>
               <div className="mt-2 border-t border-dashed border-slate-300 pt-2">
                 <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Rincian Potongan Terpilih</p>
                 <ul className="grid gap-1 text-xs text-slate-600">
@@ -1912,7 +2342,7 @@ export default function Page() {
           ) : null}
 
       {activeSection === "pembuatan-nota" ? (
-      <section id="pembuatan-nota">
+      <section id="pembuatan-nota" className="animate-sweep-in">
         <article className="card-shell p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-base font-bold">Jendela Nota / Faktur Penjualan</h2>
@@ -2028,7 +2458,7 @@ export default function Page() {
       ) : null}
 
       {activeSection === "rekap-penjualan" ? (
-      <section id="rekap-penjualan">
+      <section id="rekap-penjualan" className="animate-sweep-in">
         <article className="card-shell p-5">
           <div className="mb-3 border-b border-stone-200 pb-3">
             <h2 className="text-base font-bold">Rekap Penjualan Marketplace</h2>
@@ -2197,6 +2627,21 @@ export default function Page() {
                     <span>Komisi Dinamis (Rp)</span>
                     <input type="number" min={0} value={recapMarketplaceKomisiDinamis} onChange={(e) => setRecapMarketplaceKomisiDinamis(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                   </label>
+                  <div className="grid gap-1.5 rounded-2xl border border-stone-200 bg-stone-50/80 p-3 text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">Komisi Afiliasi</span>
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input type="checkbox" checked={recapMarketplaceKomisiAfiliasiAktif} onChange={(e) => setRecapMarketplaceKomisiAfiliasiAktif(e.target.checked)} />
+                      Komisi Afiliasi aktif (jika ada)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={recapMarketplaceKomisiAfiliasiAktif ? recapMarketplaceKomisiAfiliasi : 0}
+                      onChange={(e) => setRecapMarketplaceKomisiAfiliasi(Number(e.target.value || 0))}
+                      disabled={!recapMarketplaceKomisiAfiliasiAktif}
+                      className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition disabled:cursor-not-allowed disabled:bg-stone-100 focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </div>
                   <label className="grid gap-1.5 text-sm text-slate-600">
                     <span>Biaya Pemrosesan Pesanan (Rp)</span>
                     <input type="number" min={0} value={recapMarketplaceBiayaPemrosesanPesanan} onChange={(e) => setRecapMarketplaceBiayaPemrosesanPesanan(Number(e.target.value || 0))} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
@@ -2219,10 +2664,20 @@ export default function Page() {
           </div>
 
           <div className="mt-3 flex justify-end">
-            <button type="button" onClick={async () => { const ok = await addRecapRow(); if (ok) setRecapMenu("hasil"); }} className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800">
-              Tambah Rekap & Lihat Hasil
+            <button
+              type="button"
+              disabled={isRecapSaving}
+              onClick={async () => { const ok = await addRecapRow(); if (ok) setRecapMenu("hasil"); }}
+              className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {isRecapSaving ? "Menyimpan..." : "Tambah Rekap & Lihat Hasil"}
             </button>
           </div>
+          {recapSyncStatus !== "idle" ? (
+            <p className={`mt-2 text-right text-xs ${recapSyncStatus === "error" ? "text-rose-600" : recapSyncStatus === "success" ? "text-emerald-700" : "text-slate-600"}`}>
+              {recapSyncMessage}
+            </p>
+          ) : null}
           </div>
           ) : null}
 
