@@ -85,6 +85,12 @@ type RecapEditDraft = {
   biayaDetail: RecapBiayaItem[];
 };
 
+type HealthCheckResult = {
+  auth: { ok: boolean; message: string };
+  salesRecap: { ok: boolean; message: string };
+  userRoles: { ok: boolean; message: string };
+};
+
 type SalesRecapRow = {
   id: string;
   tanggal: string;
@@ -100,6 +106,7 @@ type SalesRecapRow = {
 
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
+const RECAP_CACHE_STORAGE_KEY = "sales-recap-cache-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
 const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
@@ -189,6 +196,35 @@ function isDuplicateIdError(error: unknown) {
   const message = String(e.message ?? "").toLowerCase();
   return code === "23505" || (message.includes("duplicate") && message.includes("id"));
 }
+
+function getSupabaseErrorInfo(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return { code: "-", message: "Unknown error" };
+  }
+  const e = error as Record<string, unknown>;
+  return {
+    code: String(e.code ?? "-"),
+    message: String(e.message ?? "Unknown error")
+  };
+}
+
+function formatSupabaseError(action: string, error: unknown) {
+  const { code, message } = getSupabaseErrorInfo(error);
+  const codeUpper = code.toUpperCase();
+  let hint = "Cek koneksi internet dan konfigurasi Supabase.";
+
+  if (code === "42501") {
+    hint = "Akses ditolak oleh RLS policy. Pastikan policy SELECT/INSERT/UPDATE/DELETE untuk role authenticated sudah benar.";
+  } else if (codeUpper === "PGRST116") {
+    hint = "Tabel tidak ditemukan/terbaca. Cek nama tabel di env dan schema public.";
+  } else if (code === "23505") {
+    hint = "Terjadi bentrok data duplikat. Silakan coba simpan ulang.";
+  } else if (isTemporarySupabaseError(error)) {
+    hint = "Gangguan jaringan sementara. Coba beberapa saat lagi.";
+  }
+
+  return `${action} gagal (code ${code}): ${message}. ${hint}`;
+}
 const toSafeNumber = (value: unknown) => {
   if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, value);
   if (typeof value === "string") {
@@ -208,11 +244,16 @@ function normalizeRole(raw: unknown): UserRole {
   return "viewer";
 }
 
+function getDefaultAuthRole(): UserRole {
+  const raw = String(process.env.NEXT_PUBLIC_DEFAULT_AUTH_ROLE ?? "staff").toLowerCase();
+  return normalizeRole(raw === "admin" ? "staff" : raw);
+}
+
 function resolveWebRole(email: string, roleMap: Record<string, UserRole>) {
   const key = normalizeEmail(email);
-  if (!key) return "viewer" as const;
+  if (!key) return getDefaultAuthRole();
   if (key === normalizeEmail(FIXED_ADMIN_EMAIL)) return "admin" as const;
-  return roleMap[key] ?? "viewer";
+  return roleMap[key] ?? getDefaultAuthRole();
 }
 
 function normalizeRecapRow(value: unknown): SalesRecapRow | null {
@@ -257,6 +298,30 @@ function normalizeRecapRow(value: unknown): SalesRecapRow | null {
     biayaDetail: biayaDetail.length ? biayaDetail : [{ label: "Biaya Lain", value: biayaTotal }],
     catatan: typeof it.catatan === "string" ? it.catatan : ""
   };
+}
+
+function readRecapCache() {
+  if (typeof window === "undefined") return [] as SalesRecapRow[];
+  try {
+    const raw = window.localStorage.getItem(RECAP_CACHE_STORAGE_KEY);
+    if (!raw) return [] as SalesRecapRow[];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [] as SalesRecapRow[];
+    return parsed
+      .map((item) => normalizeRecapRow(item))
+      .filter((row): row is SalesRecapRow => Boolean(row));
+  } catch {
+    return [] as SalesRecapRow[];
+  }
+}
+
+function writeRecapCache(rows: SalesRecapRow[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(RECAP_CACHE_STORAGE_KEY, JSON.stringify(rows));
+  } catch {
+    // ignore cache write error
+  }
 }
 
 function toRecapDbPayload(row: SalesRecapRow) {
@@ -601,6 +666,9 @@ export default function Page() {
   const [roleTargetValue, setRoleTargetValue] = useState<UserRole>("viewer");
   const [roleManageNotice, setRoleManageNotice] = useState("");
   const [roleManageLoading, setRoleManageLoading] = useState(false);
+  const [healthCheckLoading, setHealthCheckLoading] = useState(false);
+  const [healthCheckResult, setHealthCheckResult] = useState<HealthCheckResult | null>(null);
+  const [healthCheckNotice, setHealthCheckNotice] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authNotice, setAuthNotice] = useState("");
@@ -689,28 +757,69 @@ export default function Page() {
   }, []);
 
   const loadRecapRows = useCallback(async () => {
-    const { data, error } = await supabase
-      .from(RECAP_SUPABASE_TABLE)
-      .select("*")
-      .order("tanggal", { ascending: false });
+    try {
+      const { data, error, status } = await supabase
+        .from(RECAP_SUPABASE_TABLE)
+        .select("*")
+        .order("tanggal", { ascending: false });
 
-    if (error) {
-      setRecapRows([]);
-      setRecapNotice("Gagal memuat rekap dari Supabase. Cek koneksi atau struktur tabel.");
-      return;
+      if (error) {
+        // Keep the last successful snapshot so data does not disappear on transient fetch errors.
+        const cachedRows = readRecapCache();
+        if (cachedRows.length) {
+          setRecapRows(cachedRows);
+          setRecapNotice(
+            `${formatSupabaseError(
+              `Memuat rekap dari Supabase (status ${status || "-"})`,
+              error
+            )} Menampilkan cache lokal terakhir.`
+          );
+          return;
+        }
+
+        setRecapNotice(formatSupabaseError(`Memuat rekap dari Supabase (status ${status || "-"})`, error));
+        return;
+      }
+
+      const rows = (Array.isArray(data) ? data : [])
+        .map((item) => normalizeRecapRow(item))
+        .filter((row): row is SalesRecapRow => Boolean(row));
+
+      if (!rows.length) {
+        const cachedRows = readRecapCache();
+        if (cachedRows.length) {
+          setRecapRows(cachedRows);
+          setRecapNotice(
+            "Supabase mengembalikan data kosong. Menampilkan cache lokal terakhir. Cek policy SELECT/RLS bila seharusnya ada data."
+          );
+          return;
+        }
+
+        setRecapRows([]);
+        setRecapNotice(
+          "Data rekap yang terlihat untuk akun ini kosong. Jika di dashboard Supabase datanya ada, cek policy SELECT/RLS pada tabel rekap atau pastikan login memakai akun yang sama."
+        );
+        return;
+      }
+
+      setRecapRows(rows);
+      writeRecapCache(rows);
+      setRecapNotice("");
+    } catch (error) {
+      const cachedRows = readRecapCache();
+      if (cachedRows.length) {
+        setRecapRows(cachedRows);
+        setRecapNotice(`${formatSupabaseError("Memuat data rekap", error)} Menampilkan cache lokal terakhir.`);
+        return;
+      }
+      setRecapNotice(formatSupabaseError("Memuat data rekap", error));
     }
-
-    const rows = (Array.isArray(data) ? data : [])
-      .map((item) => normalizeRecapRow(item))
-      .filter((row): row is SalesRecapRow => Boolean(row));
-    setRecapRows(rows);
   }, []);
 
   const loadRoleMapFromSupabase = useCallback(async () => {
     const { data, error } = await supabase.from(USER_ROLE_TABLE).select("email, role");
     if (error) {
-      setRoleMap({});
-      setRoleManageNotice("Gagal memuat role dari Supabase. Cek tabel/policy user_roles.");
+      setRoleManageNotice(formatSupabaseError("Memuat data role", error));
       return;
     }
 
@@ -724,6 +833,7 @@ export default function Page() {
       next[emailKey] = normalizeRole(rec.role);
     }
     setRoleMap(next);
+    setRoleManageNotice("");
   }, []);
 
   useEffect(() => {
@@ -780,6 +890,13 @@ export default function Page() {
   }, [presets]);
 
   useEffect(() => {
+    const cachedRows = readRecapCache();
+    if (!cachedRows.length) return;
+    setRecapRows(cachedRows);
+    setRecapNotice("Menampilkan cache lokal terakhir sambil menunggu sinkronisasi Supabase.");
+  }, []);
+
+  useEffect(() => {
     if (!authUser) return;
     void loadRecapRows();
   }, [authUser, loadRecapRows]);
@@ -834,7 +951,12 @@ export default function Page() {
     let lastResult: { data: T; error: unknown } | null = null;
 
     for (let attempt = 0; attempt <= maxRetry; attempt += 1) {
-      const result = await task();
+      let result: { data: T; error: unknown };
+      try {
+        result = await task();
+      } catch (error) {
+        result = { data: null as T, error };
+      }
       if (!result.error) return result;
       lastResult = result;
 
@@ -1281,6 +1403,57 @@ export default function Page() {
     setRoleManageLoading(false);
   }
 
+  async function runSupabaseHealthCheck() {
+    if (healthCheckLoading) return;
+
+    setHealthCheckLoading(true);
+    setHealthCheckNotice("Menjalankan health check Supabase...");
+    setHealthCheckResult(null);
+
+    try {
+      const [sessionResult, salesResult, rolesResult] = await Promise.all([
+        supabase.auth.getSession(),
+        supabase.from(RECAP_SUPABASE_TABLE).select("id", { count: "exact", head: true }),
+        supabase.from(USER_ROLE_TABLE).select("email", { count: "exact", head: true })
+      ]);
+
+      const authOk = Boolean(sessionResult.data.session?.user);
+      const salesOk = !salesResult.error;
+      const rolesOk = !rolesResult.error;
+      const result: HealthCheckResult = {
+        auth: {
+          ok: authOk,
+          message: authOk
+            ? "Session login aktif."
+            : "Belum ada session login aktif. Silakan logout-login ulang."
+        },
+        salesRecap: {
+          ok: salesOk,
+          message: salesOk
+            ? `Akses tabel ${RECAP_SUPABASE_TABLE} OK.`
+            : formatSupabaseError(`Akses tabel ${RECAP_SUPABASE_TABLE}`, salesResult.error)
+        },
+        userRoles: {
+          ok: rolesOk,
+          message: rolesOk
+            ? `Akses tabel ${USER_ROLE_TABLE} OK.`
+            : formatSupabaseError(`Akses tabel ${USER_ROLE_TABLE}`, rolesResult.error)
+        }
+      };
+
+      setHealthCheckResult(result);
+      if (authOk && salesOk && rolesOk) {
+        setHealthCheckNotice("Health check berhasil: auth dan akses tabel OK.");
+      } else {
+        setHealthCheckNotice("Health check menemukan masalah. Lihat detail status di bawah.");
+      }
+    } catch (error) {
+      setHealthCheckNotice(formatSupabaseError("Health check Supabase", error));
+    } finally {
+      setHealthCheckLoading(false);
+    }
+  }
+
   async function addRecapRow() {
     if (authUser?.role === "viewer") {
       setRecapNotice("Role viewer hanya bisa melihat data rekap.");
@@ -1292,92 +1465,98 @@ export default function Page() {
     setRecapSyncStatus("saving");
     setRecapSyncMessage("Menyimpan ke Supabase...");
 
-    const komisiAfiliasiMarketplace = recapMarketplaceKomisiAfiliasiAktif ? recapMarketplaceKomisiAfiliasi : 0;
-    const totalBiaya =
-      recapMarketplace === "Shopee"
-        ? recapShopeeTotalBiaya
-        : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok"
-          ? recapMarketplaceTotalBiaya
-          : recapOngkir;
-    const biayaDetail: RecapBiayaItem[] =
-      recapMarketplace === "Shopee"
-        ? [
-            { label: "Biaya Administrasi", value: recapShopeeBiayaAdmin },
-            { label: "Biaya Layanan Promo XTRA", value: recapShopeeBiayaLayananPromoXtra },
-            { label: "Biaya Layanan Gratis Ongkir XTRA", value: recapShopeeBiayaLayananGratisOngkirXtra },
-            { label: "Biaya Program Hemat Biaya Kirim", value: recapShopeeBiayaProgramHematKirim },
-            { label: "Biaya Proses Pesanan", value: recapShopeeBiayaProsesPesanan },
-            { label: "Biaya Komisi AMS", value: recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0 },
-            { label: "Biaya Premi", value: recapShopeePremiAktif ? recapShopeeBiayaPremi : 0 }
-          ].filter((item) => item.value > 0)
-        : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok"
+    try {
+      const komisiAfiliasiMarketplace = recapMarketplaceKomisiAfiliasiAktif ? recapMarketplaceKomisiAfiliasi : 0;
+      const totalBiaya =
+        recapMarketplace === "Shopee"
+          ? recapShopeeTotalBiaya
+          : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok"
+            ? recapMarketplaceTotalBiaya
+            : recapOngkir;
+      const biayaDetail: RecapBiayaItem[] =
+        recapMarketplace === "Shopee"
           ? [
-              { label: "Biaya Komisi Platform", value: recapMarketplaceBiayaKomisiPlatform },
-              { label: "Biaya Layanan Mall", value: recapMarketplaceBiayaLayananMall },
-              { label: "Komisi Dinamis", value: recapMarketplaceKomisiDinamis },
-              { label: "Komisi Afiliasi", value: komisiAfiliasiMarketplace },
-              { label: "Biaya Pemrosesan Pesanan", value: recapMarketplaceBiayaPemrosesanPesanan }
+              { label: "Biaya Administrasi", value: recapShopeeBiayaAdmin },
+              { label: "Biaya Layanan Promo XTRA", value: recapShopeeBiayaLayananPromoXtra },
+              { label: "Biaya Layanan Gratis Ongkir XTRA", value: recapShopeeBiayaLayananGratisOngkirXtra },
+              { label: "Biaya Program Hemat Biaya Kirim", value: recapShopeeBiayaProgramHematKirim },
+              { label: "Biaya Proses Pesanan", value: recapShopeeBiayaProsesPesanan },
+              { label: "Biaya Komisi AMS", value: recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0 },
+              { label: "Biaya Premi", value: recapShopeePremiAktif ? recapShopeeBiayaPremi : 0 }
             ].filter((item) => item.value > 0)
-          : [{ label: "Biaya Lain", value: recapOngkir }];
+          : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok"
+            ? [
+                { label: "Biaya Komisi Platform", value: recapMarketplaceBiayaKomisiPlatform },
+                { label: "Biaya Layanan Mall", value: recapMarketplaceBiayaLayananMall },
+                { label: "Komisi Dinamis", value: recapMarketplaceKomisiDinamis },
+                { label: "Komisi Afiliasi", value: komisiAfiliasiMarketplace },
+                { label: "Biaya Pemrosesan Pesanan", value: recapMarketplaceBiayaPemrosesanPesanan }
+              ].filter((item) => item.value > 0)
+            : [{ label: "Biaya Lain", value: recapOngkir }];
 
-    let row: SalesRecapRow = {
-      id: createRecapRowId(),
-      tanggal: recapTanggal,
-      marketplace: recapMarketplace,
-      noPesanan: recapNoPesanan,
-      pelanggan: recapPelanggan,
-      omzet: Math.max(0, recapOmzet),
-      modal: Math.max(0, recapModal),
-      ongkir: Math.max(0, totalBiaya),
-      biayaDetail: biayaDetail.length ? biayaDetail : [{ label: "Biaya", value: Math.max(0, totalBiaya) }],
-      catatan: recapCatatan
-    };
+      let row: SalesRecapRow = {
+        id: createRecapRowId(),
+        tanggal: recapTanggal,
+        marketplace: recapMarketplace,
+        noPesanan: recapNoPesanan,
+        pelanggan: recapPelanggan,
+        omzet: Math.max(0, recapOmzet),
+        modal: Math.max(0, recapModal),
+        ongkir: Math.max(0, totalBiaya),
+        biayaDetail: biayaDetail.length ? biayaDetail : [{ label: "Biaya", value: Math.max(0, totalBiaya) }],
+        catatan: recapCatatan
+      };
 
-    let insertResult = await runSupabaseWithRetry(() => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]), 2);
-    if (insertResult.error && isDuplicateIdError(insertResult.error)) {
-      row = { ...row, id: createRecapRowId() };
-      insertResult = await runSupabaseWithRetry(
-        () => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]),
-        1
-      );
-    }
+      let insertResult = await runSupabaseWithRetry(() => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]), 2);
+      if (insertResult.error && isDuplicateIdError(insertResult.error)) {
+        row = { ...row, id: createRecapRowId() };
+        insertResult = await runSupabaseWithRetry(
+          () => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]),
+          1
+        );
+      }
 
-    if (insertResult.error) {
-      setRecapSyncStatus("error");
-      setRecapSyncMessage("Gagal sinkronisasi. Coba lagi.");
-      setRecapNotice("Gagal menyimpan rekap ke Supabase.");
+      if (insertResult.error) {
+        setRecapSyncStatus("error");
+        setRecapSyncMessage("Gagal sinkronisasi. Coba lagi.");
+        setRecapNotice(formatSupabaseError("Menyimpan rekap ke Supabase", insertResult.error));
+        return false;
+      }
+
+      setRecapRows((prev) => {
+        const next = [row, ...prev];
+        writeRecapCache(next);
+        return next;
+      });
+      setRecapSyncStatus("success");
+      setRecapSyncMessage("Tersimpan ke Supabase.");
+      setRecapNotice("Data rekap berhasil disimpan ke Supabase.");
+      setRecapNoPesanan("");
+      setRecapPelanggan("");
+      setRecapOmzet(0);
+      setRecapModal(0);
+      setRecapOrderItems([{ id: `${Date.now()}`, nama: "", hargaJual: 0, modal: 0, qty: 1 }]);
+      setRecapOngkir(0);
+      setRecapMarketplaceBiayaKomisiPlatform(0);
+      setRecapMarketplaceBiayaLayananMall(0);
+      setRecapMarketplaceKomisiDinamis(0);
+      setRecapMarketplaceKomisiAfiliasiAktif(false);
+      setRecapMarketplaceKomisiAfiliasi(0);
+      setRecapMarketplaceBiayaPemrosesanPesanan(0);
+      setRecapShopeeBiayaAdmin(0);
+      setRecapShopeeBiayaLayananPromoXtra(0);
+      setRecapShopeeBiayaLayananGratisOngkirXtra(0);
+      setRecapShopeeBiayaProgramHematKirim(0);
+      setRecapShopeeBiayaProsesPesanan(0);
+      setRecapShopeeKomisiAmsAktif(false);
+      setRecapShopeeBiayaKomisiAms(0);
+      setRecapShopeePremiAktif(false);
+      setRecapShopeeBiayaPremi(0);
+      setRecapCatatan("");
+      return true;
+    } finally {
       setIsRecapSaving(false);
-      return false;
     }
-
-    setRecapRows((prev) => [row, ...prev]);
-    setRecapSyncStatus("success");
-    setRecapSyncMessage("Tersimpan ke Supabase.");
-    setRecapNotice("Data rekap berhasil disimpan ke Supabase.");
-    setRecapNoPesanan("");
-    setRecapPelanggan("");
-    setRecapOmzet(0);
-    setRecapModal(0);
-    setRecapOrderItems([{ id: `${Date.now()}`, nama: "", hargaJual: 0, modal: 0, qty: 1 }]);
-    setRecapOngkir(0);
-    setRecapMarketplaceBiayaKomisiPlatform(0);
-    setRecapMarketplaceBiayaLayananMall(0);
-    setRecapMarketplaceKomisiDinamis(0);
-    setRecapMarketplaceKomisiAfiliasiAktif(false);
-    setRecapMarketplaceKomisiAfiliasi(0);
-    setRecapMarketplaceBiayaPemrosesanPesanan(0);
-    setRecapShopeeBiayaAdmin(0);
-    setRecapShopeeBiayaLayananPromoXtra(0);
-    setRecapShopeeBiayaLayananGratisOngkirXtra(0);
-    setRecapShopeeBiayaProgramHematKirim(0);
-    setRecapShopeeBiayaProsesPesanan(0);
-    setRecapShopeeKomisiAmsAktif(false);
-    setRecapShopeeBiayaKomisiAms(0);
-    setRecapShopeePremiAktif(false);
-    setRecapShopeeBiayaPremi(0);
-    setRecapCatatan("");
-    setIsRecapSaving(false);
-    return true;
   }
 
   async function deleteRecapRow(id: string) {
@@ -1390,11 +1569,15 @@ export default function Page() {
       2
     );
     if (error) {
-      setRecapNotice("Gagal menghapus data rekap di Supabase.");
+      setRecapNotice(formatSupabaseError("Menghapus data rekap", error));
       return;
     }
 
-    setRecapRows((prev) => prev.filter((row) => row.id !== id));
+    setRecapRows((prev) => {
+      const next = prev.filter((row) => row.id !== id);
+      writeRecapCache(next);
+      return next;
+    });
     setOpenBiayaDetailRow((prev) => (prev && prev.id === id ? null : prev));
     setEditRecapDraft((prev) => (prev && prev.id === id ? null : prev));
     setRecapNotice("Data rekap berhasil dihapus.");
@@ -1482,11 +1665,15 @@ export default function Page() {
       2
     );
     if (error) {
-      setRecapNotice("Gagal memperbarui data rekap di Supabase.");
+      setRecapNotice(formatSupabaseError("Memperbarui data rekap", error));
       return;
     }
 
-    setRecapRows((prev) => prev.map((row) => (row.id === updatedRow.id ? updatedRow : row)));
+    setRecapRows((prev) => {
+      const next = prev.map((row) => (row.id === updatedRow.id ? updatedRow : row));
+      writeRecapCache(next);
+      return next;
+    });
     setOpenBiayaDetailRow((prev) => (prev && prev.id === updatedRow.id ? updatedRow : prev));
     setEditRecapDraft(null);
     setRecapNotice("Data rekap berhasil diperbarui di Supabase.");
@@ -2307,6 +2494,35 @@ export default function Page() {
               </div>
             </div>
           ) : null}
+
+          <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/80 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Health Check</p>
+              <button
+                type="button"
+                onClick={runSupabaseHealthCheck}
+                disabled={healthCheckLoading}
+                className="rounded-xl border border-sky-300 bg-white px-2 py-1 text-[11px] font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {healthCheckLoading ? "Checking..." : "Run Check"}
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-600">Cek auth, koneksi, dan akses tabel Supabase.</p>
+            {healthCheckNotice ? <p className="mt-2 text-[11px] text-slate-700">{healthCheckNotice}</p> : null}
+            {healthCheckResult ? (
+              <div className="mt-2 space-y-1.5">
+                <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.auth.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                  <strong>Auth:</strong> {healthCheckResult.auth.message}
+                </div>
+                <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.salesRecap.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                  <strong>{RECAP_SUPABASE_TABLE}:</strong> {healthCheckResult.salesRecap.message}
+                </div>
+                <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.userRoles.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                  <strong>{USER_ROLE_TABLE}:</strong> {healthCheckResult.userRoles.message}
+                </div>
+              </div>
+            ) : null}
+          </div>
         </aside>
 
         <div className="space-y-5">
@@ -3105,7 +3321,21 @@ export default function Page() {
           </div>
 
           <div className="mt-4 rounded-2xl border border-stone-200 bg-stone-50/70 p-3">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Filter Data</p>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Filter Data</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setRecapFilterStartDate("");
+                  setRecapFilterEndDate("");
+                  setRecapFilterMarketplace("Semua");
+                  setRecapFilterQuery("");
+                }}
+                className="rounded-xl border border-stone-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
+              >
+                Reset Filter
+              </button>
+            </div>
             <div className="grid gap-2 md:grid-cols-4">
               <label className="grid gap-1 text-xs text-slate-600">
                 <span>Dari Tanggal</span>
