@@ -108,12 +108,13 @@ const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
 const RECAP_CACHE_STORAGE_KEY = "sales-recap-cache-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
+const PRESET_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_PRESET_TABLE || "potongan_presets";
 const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
 const ROLE_SECTION_ACCESS: Record<UserRole, SectionId[]> = {
   admin: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
   staff: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
-  viewer: ["rekap-penjualan"]
+  viewer: ["kalkulator-potongan", "rekap-penjualan"]
 };
 const MARKETPLACE_VISUAL = {
   tokopedia: {
@@ -453,6 +454,29 @@ function normalizePresetData(value: unknown): PresetData | null {
   };
 }
 
+function normalizePresetItem(value: unknown): PresetItem | null {
+  if (typeof value !== "object" || value === null) return null;
+  const it = value as Record<string, unknown>;
+  const data = normalizePresetData(it.data ?? it);
+  if (!data) return null;
+
+  const idRaw = typeof it.id === "string" ? it.id.trim() : "";
+  const nameRaw = typeof it.name === "string" ? it.name.trim() : "";
+  return {
+    id: idRaw || createRecapRowId(),
+    name: nameRaw || "Preset Tanpa Nama",
+    data
+  };
+}
+
+function toPresetDbPayload(item: PresetItem) {
+  return {
+    id: item.id,
+    name: item.name,
+    data: item.data
+  };
+}
+
 function parseShopeeGratisOngkir(mode: ShopeeOngkirMode) {
   if (mode === "off") {
     return { active: false, pct: 0, cap: 0, label: "Tidak aktif" };
@@ -618,7 +642,7 @@ function ToggleRow({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 rounded-2xl border border-stone-200 bg-white/95 px-3 py-2.5 transition hover:border-stone-300 hover:shadow-sm">
+    <div className="flex flex-wrap items-start justify-between gap-2 rounded-2xl border border-stone-200 bg-white/95 px-3 py-2.5 transition hover:border-stone-300 hover:shadow-sm sm:flex-nowrap sm:items-center">
       <span className="block text-sm text-slate-800">
         {title}
         <small className="mt-0.5 block text-xs text-slate-500">{subtitle}</small>
@@ -655,6 +679,7 @@ export default function Page() {
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [presets, setPresets] = useState<PresetItem[]>([]);
   const [presetNotice, setPresetNotice] = useState("");
+  const [isPresetSaving, setIsPresetSaving] = useState(false);
   const importPresetRef = useRef<HTMLInputElement | null>(null);
   const [showInvoiceWindow, setShowInvoiceWindow] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionId>("kalkulator-potongan");
@@ -836,6 +861,24 @@ export default function Page() {
     setRoleManageNotice("");
   }, []);
 
+  const loadPresetsFromSupabase = useCallback(async () => {
+    const { data, error } = await runSupabaseWithRetry(
+      () => supabase.from(PRESET_SUPABASE_TABLE).select("*").order("name", { ascending: true }),
+      2
+    );
+
+    if (error) {
+      setPresetNotice(`${formatSupabaseError("Memuat preset potongan", error)} Menampilkan cache lokal.`);
+      return;
+    }
+
+    const next = (Array.isArray(data) ? data : [])
+      .map((item) => normalizePresetItem(item))
+      .filter((item): item is PresetItem => Boolean(item));
+    setPresets(next);
+    setPresetNotice("");
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -874,8 +917,13 @@ export default function Page() {
     try {
       const raw = window.localStorage.getItem(PRESET_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as PresetItem[];
-      if (Array.isArray(parsed)) setPresets(parsed);
+      const parsed = JSON.parse(raw) as unknown[];
+      if (Array.isArray(parsed)) {
+        const cached = parsed
+          .map((item) => normalizePresetItem(item))
+          .filter((item): item is PresetItem => Boolean(item));
+        if (cached.length) setPresets(cached);
+      }
     } catch {
       setPresets([]);
     }
@@ -895,6 +943,33 @@ export default function Page() {
     setRecapRows(cachedRows);
     setRecapNotice("Menampilkan cache lokal terakhir sambil menunggu sinkronisasi Supabase.");
   }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
+    void loadPresetsFromSupabase();
+  }, [authUser, loadPresetsFromSupabase]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    const channel = supabase
+      .channel(`preset-realtime-${PRESET_SUPABASE_TABLE}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: PRESET_SUPABASE_TABLE
+        },
+        () => {
+          void loadPresetsFromSupabase();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [authUser, loadPresetsFromSupabase]);
 
   useEffect(() => {
     if (!authUser) return;
@@ -988,20 +1063,40 @@ export default function Page() {
     setMallAfiliasiPct(data.mallAfiliasiPct);
   }
 
-  function handleSavePreset() {
+  async function handleSavePreset() {
+    if (authUser?.role === "viewer") {
+      setPresetNotice("Role viewer hanya bisa memakai preset yang sudah ada.");
+      return;
+    }
     const name = presetName.trim();
-    if (!name) return;
+    if (!name) {
+      setPresetNotice("Isi nama preset terlebih dahulu.");
+      return;
+    }
+    if (isPresetSaving) return;
 
     const item: PresetItem = {
-      id: `${Date.now()}`,
+      id: createRecapRowId(),
       name,
       data: currentPresetData
     };
 
-    setPresets((prev) => [item, ...prev]);
+    setIsPresetSaving(true);
+    const { error } = await runSupabaseWithRetry(
+      () => supabase.from(PRESET_SUPABASE_TABLE).insert([toPresetDbPayload(item)]),
+      2
+    );
+    if (error) {
+      setPresetNotice(formatSupabaseError("Menyimpan preset", error));
+      setIsPresetSaving(false);
+      return;
+    }
+
+    await loadPresetsFromSupabase();
     setPresetName("");
     setSelectedPresetId(item.id);
-    setPresetNotice("Preset berhasil disimpan.");
+    setPresetNotice("Preset berhasil disimpan dan tersinkron ke semua akun.");
+    setIsPresetSaving(false);
   }
 
   function handleLoadPreset() {
@@ -1011,28 +1106,80 @@ export default function Page() {
     setPresetNotice(`Preset "${found.name}" diterapkan.`);
   }
 
-  function handleDeletePreset() {
-    if (!selectedPresetId) return;
+  async function handleDeletePreset() {
+    if (authUser?.role === "viewer") {
+      setPresetNotice("Role viewer tidak punya izin menghapus preset.");
+      return;
+    }
+    if (!selectedPresetId) {
+      setPresetNotice("Pilih preset yang ingin dihapus.");
+      return;
+    }
+    if (isPresetSaving) return;
+
+    setIsPresetSaving(true);
+    const { error } = await runSupabaseWithRetry(
+      () => supabase.from(PRESET_SUPABASE_TABLE).delete().eq("id", selectedPresetId),
+      2
+    );
+    if (error) {
+      setPresetNotice(formatSupabaseError("Menghapus preset", error));
+      setIsPresetSaving(false);
+      return;
+    }
+
     setPresets((prev) => prev.filter((p) => p.id !== selectedPresetId));
     setSelectedPresetId("");
-    setPresetNotice("Preset berhasil dihapus.");
+    setPresetNotice("Preset berhasil dihapus dari Supabase.");
+    setIsPresetSaving(false);
   }
 
-  function handleUpdatePreset() {
-    if (!selectedPresetId) return;
+  async function handleUpdatePreset() {
+    if (authUser?.role === "viewer") {
+      setPresetNotice("Role viewer tidak punya izin mengubah preset.");
+      return;
+    }
+    if (!selectedPresetId) {
+      setPresetNotice("Pilih preset yang ingin diupdate.");
+      return;
+    }
+    if (isPresetSaving) return;
+
     const nextName = presetName.trim();
+    const found = presets.find((p) => p.id === selectedPresetId);
+    if (!found) {
+      setPresetNotice("Preset yang dipilih tidak ditemukan.");
+      return;
+    }
+
+    setIsPresetSaving(true);
+    const payload = {
+      name: nextName || found.name,
+      data: currentPresetData
+    };
+    const { error } = await runSupabaseWithRetry(
+      () => supabase.from(PRESET_SUPABASE_TABLE).update(payload).eq("id", selectedPresetId),
+      2
+    );
+    if (error) {
+      setPresetNotice(formatSupabaseError("Memperbarui preset", error));
+      setIsPresetSaving(false);
+      return;
+    }
+
     setPresets((prev) =>
       prev.map((p) =>
         p.id === selectedPresetId
           ? {
               ...p,
-              name: nextName || p.name,
+              name: payload.name,
               data: currentPresetData
             }
           : p
       )
     );
-    setPresetNotice("Preset berhasil diperbarui.");
+    setPresetNotice("Preset berhasil diperbarui di Supabase.");
+    setIsPresetSaving(false);
   }
 
   function handleExportPresets() {
@@ -1050,11 +1197,16 @@ export default function Page() {
   }
 
   function handleImportPresets(event: ChangeEvent<HTMLInputElement>) {
+    if (authUser?.role === "viewer") {
+      setPresetNotice("Role viewer tidak punya izin import preset.");
+      if (importPresetRef.current) importPresetRef.current.value = "";
+      return;
+    }
     const file = event.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const raw = String(reader.result ?? "").replace(/^\uFEFF/, "").trim();
         const parsed = JSON.parse(raw) as unknown;
@@ -1093,11 +1245,23 @@ export default function Page() {
           return;
         }
 
-        setPresets((prev) => [...valid, ...prev]);
-        setPresetNotice(`${valid.length} preset berhasil diimport.`);
+        setIsPresetSaving(true);
+        const payload = valid.map((item) => toPresetDbPayload(item));
+        const { error } = await runSupabaseWithRetry(
+          () => supabase.from(PRESET_SUPABASE_TABLE).insert(payload),
+          2
+        );
+        if (error) {
+          setPresetNotice(formatSupabaseError("Import preset", error));
+          return;
+        }
+
+        await loadPresetsFromSupabase();
+        setPresetNotice(`${valid.length} preset berhasil diimport ke Supabase.`);
       } catch {
         setPresetNotice("Import gagal. Pastikan file JSON preset valid.");
       } finally {
+        setIsPresetSaving(false);
         if (importPresetRef.current) importPresetRef.current.value = "";
       }
     };
@@ -1584,6 +1748,10 @@ export default function Page() {
   }
 
   function openEditRecap(row: SalesRecapRow) {
+    if (authUser?.role === "viewer") {
+      setRecapNotice("Role viewer tidak punya izin mengubah data.");
+      return;
+    }
     setOpenBiayaDetailRow(null);
     setEditRecapDraft({
       id: row.id,
@@ -2262,6 +2430,7 @@ export default function Page() {
   const allowedSections = currentRole ? ROLE_SECTION_ACCESS[currentRole] : [];
   const canManageRecap = currentRole === "admin" || currentRole === "staff";
   const canDeleteRecap = currentRole === "admin";
+  const canManagePreset = currentRole === "admin" || currentRole === "staff";
   const roleEntries = useMemo(
     () => Object.entries(roleMap).sort((a, b) => a[0].localeCompare(b[0])),
     [roleMap]
@@ -2331,7 +2500,7 @@ export default function Page() {
   }
 
   return (
-    <main className="animate-fade-up relative mx-auto my-6 w-[94vw] max-w-[1320px] overflow-hidden">
+    <main className="animate-fade-up relative mx-auto my-6 w-[94vw] max-w-[1320px] overflow-x-clip">
       <div className="animate-float-soft pointer-events-none absolute -left-20 top-0 h-72 w-72 rounded-full bg-emerald-300/20 blur-3xl" />
       <div className="animate-float-soft pointer-events-none absolute -right-20 top-20 h-72 w-72 rounded-full bg-orange-300/20 blur-3xl" style={{ animationDelay: "1.2s" }} />
       <div className="animate-float-soft pointer-events-none absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-sky-300/20 blur-3xl" style={{ animationDelay: "2.1s" }} />
@@ -2350,7 +2519,7 @@ export default function Page() {
               </p>
             </div>
             <div className="rounded-2xl border border-stone-200 bg-white/90 px-3 py-2 text-xs text-slate-600">
-              <p>
+              <p className="break-all">
                 Login: <strong className="text-slate-900">{authUser.email}</strong>
               </p>
               <p>
@@ -2397,8 +2566,55 @@ export default function Page() {
         </div>
       </header>
 
+      <div className="sticky top-2 z-30 mb-4 lg:hidden">
+        <div className="card-shell border-stone-200/80 bg-white/90 p-2 backdrop-blur-md">
+          <p className="mb-2 px-1 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {allowedSections.includes("kalkulator-potongan") ? (
+              <button
+                type="button"
+                onClick={() => setActiveSection("kalkulator-potongan")}
+                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                  activeSection === "kalkulator-potongan"
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                }`}
+              >
+                Kalkulator
+              </button>
+            ) : null}
+            {allowedSections.includes("pembuatan-nota") ? (
+              <button
+                type="button"
+                onClick={() => setActiveSection("pembuatan-nota")}
+                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                  activeSection === "pembuatan-nota"
+                    ? "border-orange-300 bg-orange-50 text-orange-700"
+                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                }`}
+              >
+                Nota/Faktur
+              </button>
+            ) : null}
+            {allowedSections.includes("rekap-penjualan") ? (
+              <button
+                type="button"
+                onClick={() => setActiveSection("rekap-penjualan")}
+                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                  activeSection === "rekap-penjualan"
+                    ? "border-sky-300 bg-sky-50 text-sky-700"
+                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                }`}
+              >
+                Rekap Penjualan
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-        <aside className="card-shell h-fit p-3 lg:sticky lg:top-4">
+        <aside className="card-shell hidden h-fit p-3 lg:sticky lg:top-4 lg:block">
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
           <nav className="grid gap-2 text-sm">
             {allowedSections.includes("kalkulator-potongan") ? (
@@ -2495,37 +2711,39 @@ export default function Page() {
             </div>
           ) : null}
 
-          <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/80 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Health Check</p>
-              <button
-                type="button"
-                onClick={runSupabaseHealthCheck}
-                disabled={healthCheckLoading}
-                className="rounded-xl border border-sky-300 bg-white px-2 py-1 text-[11px] font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {healthCheckLoading ? "Checking..." : "Run Check"}
-              </button>
-            </div>
-            <p className="mt-1 text-[11px] text-slate-600">Cek auth, koneksi, dan akses tabel Supabase.</p>
-            {healthCheckNotice ? <p className="mt-2 text-[11px] text-slate-700">{healthCheckNotice}</p> : null}
-            {healthCheckResult ? (
-              <div className="mt-2 space-y-1.5">
-                <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.auth.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
-                  <strong>Auth:</strong> {healthCheckResult.auth.message}
-                </div>
-                <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.salesRecap.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
-                  <strong>{RECAP_SUPABASE_TABLE}:</strong> {healthCheckResult.salesRecap.message}
-                </div>
-                <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.userRoles.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
-                  <strong>{USER_ROLE_TABLE}:</strong> {healthCheckResult.userRoles.message}
-                </div>
+          {currentRole === "admin" ? (
+            <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/80 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Health Check</p>
+                <button
+                  type="button"
+                  onClick={runSupabaseHealthCheck}
+                  disabled={healthCheckLoading}
+                  className="rounded-xl border border-sky-300 bg-white px-2 py-1 text-[11px] font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {healthCheckLoading ? "Checking..." : "Run Check"}
+                </button>
               </div>
-            ) : null}
-          </div>
+              <p className="mt-1 text-[11px] text-slate-600">Cek auth, koneksi, dan akses tabel Supabase.</p>
+              {healthCheckNotice ? <p className="mt-2 text-[11px] text-slate-700">{healthCheckNotice}</p> : null}
+              {healthCheckResult ? (
+                <div className="mt-2 space-y-1.5">
+                  <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.auth.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                    <strong>Auth:</strong> {healthCheckResult.auth.message}
+                  </div>
+                  <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.salesRecap.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                    <strong>{RECAP_SUPABASE_TABLE}:</strong> {healthCheckResult.salesRecap.message}
+                  </div>
+                  <div className={`rounded-xl border px-2 py-1.5 text-[11px] ${healthCheckResult.userRoles.ok ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800"}`}>
+                    <strong>{USER_ROLE_TABLE}:</strong> {healthCheckResult.userRoles.message}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </aside>
 
-        <div className="space-y-5">
+        <div className="min-w-0 space-y-5">
           {activeSection === "rekap-penjualan" ? (
           <section className="animate-sweep-in card-shell border border-sky-200/70 bg-gradient-to-r from-sky-50/80 via-white to-emerald-50/70 p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -2550,7 +2768,7 @@ export default function Page() {
 
             {recapLineChart.hasData ? (
               <div className="overflow-x-auto rounded-2xl border border-sky-100 bg-white/85 p-2">
-                <svg viewBox={`0 0 ${recapLineChart.width} ${recapLineChart.height}`} className="h-52 w-full min-w-[640px]">
+                <svg viewBox={`0 0 ${recapLineChart.width} ${recapLineChart.height}`} className="h-52 w-full min-w-[520px] sm:min-w-[640px]">
                   <defs>
                     <linearGradient id="lineAreaFill" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0.28" />
@@ -2650,23 +2868,27 @@ export default function Page() {
 
           <div className="mb-4 rounded-2xl border border-stone-200 bg-gradient-to-br from-stone-100/70 to-white p-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Preset Potongan</p>
-            <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-              <input
-                type="text"
-                value={presetName}
-                onChange={(e) => setPresetName(e.target.value)}
-                placeholder="Nama preset (contoh: Mode Shopee Aman)"
-                className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
-              />
-              <button
-                type="button"
-                onClick={handleSavePreset}
-                className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
-              >
-                Simpan
-              </button>
-            </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto_auto]">
+            {canManagePreset ? (
+              <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                <input
+                  type="text"
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  disabled={isPresetSaving}
+                  placeholder="Nama preset (contoh: Mode Shopee Aman)"
+                  className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                />
+                <button
+                  type="button"
+                  onClick={handleSavePreset}
+                  disabled={isPresetSaving}
+                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                >
+                  {isPresetSaving ? "Menyimpan..." : "Simpan"}
+                </button>
+              </div>
+            ) : null}
+            <div className={`${canManagePreset ? "mt-2" : ""} grid gap-2 ${canManagePreset ? "md:grid-cols-[1fr_auto_auto]" : "md:grid-cols-[1fr_auto]"}`}>
               <select
                 value={selectedPresetId}
                 onChange={(e) => setSelectedPresetId(e.target.value)}
@@ -2682,44 +2904,53 @@ export default function Page() {
               <button
                 type="button"
                 onClick={handleLoadPreset}
+                disabled={isPresetSaving}
                 className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
               >
                 Pakai
               </button>
-              <button
-                type="button"
-                onClick={handleDeletePreset}
-                className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-100"
-              >
-                Hapus
-              </button>
+              {canManagePreset ? (
+                <button
+                  type="button"
+                  onClick={handleDeletePreset}
+                  disabled={isPresetSaving}
+                  className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-100"
+                >
+                  Hapus
+                </button>
+              ) : null}
             </div>
-            <div className="mt-2 grid gap-2 md:grid-cols-[auto_auto_1fr]">
-              <button
-                type="button"
-                onClick={handleUpdatePreset}
-                className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
-              >
-                Update
-              </button>
-              <button
-                type="button"
-                onClick={handleExportPresets}
-                className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
-              >
-                Export JSON
-              </button>
-              <label className="flex cursor-pointer items-center justify-center rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100">
-                Import JSON
-                <input
-                  ref={importPresetRef}
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={handleImportPresets}
-                  className="hidden"
-                />
-              </label>
-            </div>
+            {canManagePreset ? (
+              <div className="mt-2 grid gap-2 md:grid-cols-[auto_auto_1fr]">
+                <button
+                  type="button"
+                  onClick={handleUpdatePreset}
+                  disabled={isPresetSaving}
+                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                >
+                  Update
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportPresets}
+                  disabled={isPresetSaving}
+                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                >
+                  Export JSON
+                </button>
+                <label className="flex cursor-pointer items-center justify-center rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100">
+                  Import JSON
+                  <input
+                    ref={importPresetRef}
+                    type="file"
+                    accept="application/json,.json"
+                    onChange={handleImportPresets}
+                    disabled={isPresetSaving}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+            ) : null}
             {presetNotice ? <p className="mt-2 text-xs text-slate-600">{presetNotice}</p> : null}
           </div>
 
@@ -2748,7 +2979,7 @@ export default function Page() {
                 <input type="checkbox" checked={tokopediaGratisOngkir} onChange={(e) => setTokopediaGratisOngkir(e.target.checked)} className="h-4 w-4 accent-stone-700" />
               </ToggleRow>
               <ToggleRow title="Komisi Afiliasi Tokopedia" subtitle="Opsional, isi persen sesuai kebutuhan">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <input type="number" value={tokopediaAfiliasiPct} min={0} step={0.1} onChange={(e) => setTokopediaAfiliasiPct(Number(e.target.value || 0))} className="w-16 rounded-xl border border-stone-200 px-2 py-1 text-right text-sm" />
                   <span className="text-xs text-slate-500">%</span>
                   <input type="checkbox" checked={tokopediaAfiliasiAktif} onChange={(e) => setTokopediaAfiliasiAktif(e.target.checked)} className="h-4 w-4 accent-stone-700" />
@@ -2762,7 +2993,7 @@ export default function Page() {
                 <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">{shopeeFeatureCount} fitur aktif</span>
               </div>
               <ToggleRow title="Gratis Ongkir Shopee" subtitle="Pilih kategori dan persentase">
-                <select value={shopeeGratisOngkir} onChange={(e) => setShopeeGratisOngkir(e.target.value as ShopeeOngkirMode)} className="w-[220px] rounded-xl border border-stone-200 px-2 py-1 text-sm outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                <select value={shopeeGratisOngkir} onChange={(e) => setShopeeGratisOngkir(e.target.value as ShopeeOngkirMode)} className="w-full max-w-[220px] rounded-xl border border-stone-200 px-2 py-1 text-sm outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
                   <option value="off">Tidak aktif</option>
                   <optgroup label="Di bawah 5kg (maks Rp 40.000)">
                     <option value="bawah-1">1%</option>
@@ -2785,7 +3016,7 @@ export default function Page() {
                 <input type="checkbox" checked={shopeeAsuransi} onChange={(e) => setShopeeAsuransi(e.target.checked)} className="h-4 w-4 accent-stone-700" />
               </ToggleRow>
               <ToggleRow title="Komisi Afiliasi Shopee" subtitle="Opsional, isi persen sesuai kebutuhan">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <input type="number" value={shopeeAfiliasiPct} min={0} step={0.1} onChange={(e) => setShopeeAfiliasiPct(Number(e.target.value || 0))} className="w-16 rounded-xl border border-stone-200 px-2 py-1 text-right text-sm" />
                   <span className="text-xs text-slate-500">%</span>
                   <input type="checkbox" checked={shopeeAfiliasiAktif} onChange={(e) => setShopeeAfiliasiAktif(e.target.checked)} className="h-4 w-4 accent-stone-700" />
@@ -2805,7 +3036,7 @@ export default function Page() {
                 <input type="checkbox" checked={mallGratisOngkir} onChange={(e) => setMallGratisOngkir(e.target.checked)} className="h-4 w-4 accent-stone-700" />
               </ToggleRow>
               <ToggleRow title="Komisi Afiliasi Tokopedia Mall" subtitle="Opsional, isi persen sesuai kebutuhan">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-end gap-2">
                   <input type="number" value={mallAfiliasiPct} min={0} step={0.1} onChange={(e) => setMallAfiliasiPct(Number(e.target.value || 0))} className="w-16 rounded-xl border border-stone-200 px-2 py-1 text-right text-sm" />
                   <span className="text-xs text-slate-500">%</span>
                   <input type="checkbox" checked={mallAfiliasiAktif} onChange={(e) => setMallAfiliasiAktif(e.target.checked)} className="h-4 w-4 accent-stone-700" />
@@ -2982,7 +3213,7 @@ export default function Page() {
                   {invoiceItems.map((item) => {
                     const lineTotal = Math.max(0, item.qty) * Math.max(0, item.harga);
                     return (
-                      <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 md:grid-cols-[1.6fr_90px_130px_130px_auto]">
+                      <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 lg:grid-cols-[1.6fr_90px_130px_130px_auto]">
                         <input placeholder="Nama barang" value={item.nama} onChange={(e) => updateInvoiceItem(item.id, "nama", e.target.value)} className="rounded-xl border border-stone-200 px-2 py-2 text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                         <input type="number" min={0} value={item.qty} onChange={(e) => updateInvoiceItem(item.id, "qty", Number(e.target.value || 0))} className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                         <input type="number" min={0} value={item.harga} onChange={(e) => updateInvoiceItem(item.id, "harga", Number(e.target.value || 0))} className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
@@ -3123,7 +3354,7 @@ export default function Page() {
                   const lineOmzet = itemQty * itemHargaJual;
                   const lineModal = itemQty * itemModal;
                   return (
-                  <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 md:grid-cols-[1.4fr_130px_130px_90px_140px_140px_auto]">
+                  <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 lg:grid-cols-[1.4fr_130px_130px_90px_140px_140px_auto]">
                     <input
                       placeholder="Nama barang"
                       value={item.nama}
@@ -3413,7 +3644,7 @@ export default function Page() {
           </div>
 
           <div className="mt-3 overflow-x-auto rounded-2xl border border-stone-200">
-            <table className="min-w-full text-sm">
+            <table className="min-w-[1080px] text-sm">
               <thead className="bg-stone-50 text-slate-700">
                 <tr>
                   <th className="px-3 py-2 text-left">Tanggal</th>
@@ -3425,7 +3656,7 @@ export default function Page() {
                   <th className="px-3 py-2 text-right">Biaya</th>
                   <th className="px-3 py-2 text-right">Laba</th>
                   <th className="px-3 py-2 text-left">Catatan</th>
-                  <th className="px-3 py-2 text-center">Aksi</th>
+                  <th className="min-w-[220px] px-3 py-2 text-center">Aksi</th>
                 </tr>
               </thead>
               <tbody>
@@ -3443,16 +3674,18 @@ export default function Page() {
                         <td className="px-3 py-2 text-right">{rupiah(row.ongkir)}</td>
                         <td className={laba >= 0 ? "px-3 py-2 text-right text-slate-900" : "px-3 py-2 text-right text-rose-600"}>{rupiah(laba)}</td>
                         <td className="px-3 py-2">{row.catatan || "-"}</td>
-                        <td className="px-3 py-2 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button type="button" onClick={() => openEditRecap(row)} className="rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
-                              Edit
-                            </button>
-                            <button type="button" onClick={() => setOpenBiayaDetailRow(row)} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                        <td className="min-w-[220px] px-3 py-2 text-center">
+                          <div className="flex flex-wrap items-center justify-center gap-1.5">
+                            {canManageRecap ? (
+                              <button type="button" onClick={() => openEditRecap(row)} className="whitespace-nowrap rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
+                                Edit
+                              </button>
+                            ) : null}
+                            <button type="button" onClick={() => setOpenBiayaDetailRow(row)} className="whitespace-nowrap rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
                               Detail Biaya
                             </button>
                             {canDeleteRecap ? (
-                              <button type="button" onClick={() => deleteRecapRow(row.id)} className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                              <button type="button" onClick={() => deleteRecapRow(row.id)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
                                 Hapus
                               </button>
                             ) : null}
@@ -3566,7 +3799,7 @@ export default function Page() {
                   </div>
                   <div className="space-y-2">
                     {editRecapDraft.biayaDetail.map((item, index) => (
-                      <div key={`edit-biaya-${index}`} className="grid gap-2 md:grid-cols-[1.4fr_140px_auto]">
+                      <div key={`edit-biaya-${index}`} className="grid gap-2 lg:grid-cols-[1.4fr_140px_auto]">
                         <input
                           value={item.label}
                           onChange={(e) => updateEditRecapBiayaDetail(index, "label", e.target.value)}
