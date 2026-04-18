@@ -1,6 +1,7 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 
 type ShopeeOngkirMode =
@@ -50,6 +51,7 @@ type PresetItem = {
 };
 
 type SectionId = "kalkulator-potongan" | "pembuatan-nota" | "rekap-penjualan";
+type UserRole = "admin" | "staff" | "viewer";
 
 type InvoiceItem = {
   id: string;
@@ -99,6 +101,13 @@ type SalesRecapRow = {
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
+const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
+const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
+const ROLE_SECTION_ACCESS: Record<UserRole, SectionId[]> = {
+  admin: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
+  staff: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
+  viewer: ["rekap-penjualan"]
+};
 const MARKETPLACE_VISUAL = {
   tokopedia: {
     label: "Tokopedia",
@@ -188,6 +197,23 @@ const toSafeNumber = (value: unknown) => {
   }
   return 0;
 };
+
+function normalizeEmail(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function normalizeRole(raw: unknown): UserRole {
+  const role = String(raw ?? "").toLowerCase();
+  if (role === "admin" || role === "staff" || role === "viewer") return role;
+  return "viewer";
+}
+
+function resolveWebRole(email: string, roleMap: Record<string, UserRole>) {
+  const key = normalizeEmail(email);
+  if (!key) return "viewer" as const;
+  if (key === normalizeEmail(FIXED_ADMIN_EMAIL)) return "admin" as const;
+  return roleMap[key] ?? "viewer";
+}
 
 function normalizeRecapRow(value: unknown): SalesRecapRow | null {
   if (typeof value !== "object" || value === null) return null;
@@ -567,6 +593,18 @@ export default function Page() {
   const importPresetRef = useRef<HTMLInputElement | null>(null);
   const [showInvoiceWindow, setShowInvoiceWindow] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionId>("kalkulator-potongan");
+  const [authReady, setAuthReady] = useState(false);
+  const [sessionUser, setSessionUser] = useState<User | null>(null);
+  const [authUser, setAuthUser] = useState<{ id: string; email: string; role: UserRole } | null>(null);
+  const [roleMap, setRoleMap] = useState<Record<string, UserRole>>({});
+  const [roleTargetEmail, setRoleTargetEmail] = useState("");
+  const [roleTargetValue, setRoleTargetValue] = useState<UserRole>("viewer");
+  const [roleManageNotice, setRoleManageNotice] = useState("");
+  const [roleManageLoading, setRoleManageLoading] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [authNotice, setAuthNotice] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
   const [invoiceNo, setInvoiceNo] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
   const [invoiceBuyer, setInvoiceBuyer] = useState("");
@@ -601,6 +639,8 @@ export default function Page() {
   const [recapShopeeBiayaProsesPesanan, setRecapShopeeBiayaProsesPesanan] = useState(0);
   const [recapShopeeKomisiAmsAktif, setRecapShopeeKomisiAmsAktif] = useState(false);
   const [recapShopeeBiayaKomisiAms, setRecapShopeeBiayaKomisiAms] = useState(0);
+  const [recapShopeePremiAktif, setRecapShopeePremiAktif] = useState(false);
+  const [recapShopeeBiayaPremi, setRecapShopeeBiayaPremi] = useState(0);
   const [recapCatatan, setRecapCatatan] = useState("");
   const [recapRows, setRecapRows] = useState<SalesRecapRow[]>([]);
   const [recapFilterMarketplace, setRecapFilterMarketplace] = useState<"Semua" | SalesRecapRow["marketplace"]>("Semua");
@@ -633,6 +673,21 @@ export default function Page() {
     mallAfiliasiPct
   };
 
+  const applyAuthUser = useCallback((user: User | null, map: Record<string, UserRole>) => {
+    if (!user) {
+      setAuthUser(null);
+      return;
+    }
+
+    const email = user.email || "";
+    const role = resolveWebRole(email, map);
+    setAuthUser({
+      id: user.id,
+      email: email || "-",
+      role
+    });
+  }, []);
+
   const loadRecapRows = useCallback(async () => {
     const { data, error } = await supabase
       .from(RECAP_SUPABASE_TABLE)
@@ -650,6 +705,60 @@ export default function Page() {
       .filter((row): row is SalesRecapRow => Boolean(row));
     setRecapRows(rows);
   }, []);
+
+  const loadRoleMapFromSupabase = useCallback(async () => {
+    const { data, error } = await supabase.from(USER_ROLE_TABLE).select("email, role");
+    if (error) {
+      setRoleMap({});
+      setRoleManageNotice("Gagal memuat role dari Supabase. Cek tabel/policy user_roles.");
+      return;
+    }
+
+    const next: Record<string, UserRole> = {};
+    const rows = Array.isArray(data) ? data : [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const rec = row as Record<string, unknown>;
+      const emailKey = normalizeEmail(String(rec.email ?? ""));
+      if (!emailKey || emailKey === normalizeEmail(FIXED_ADMIN_EMAIL)) continue;
+      next[emailKey] = normalizeRole(rec.role);
+    }
+    setRoleMap(next);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    void supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setSessionUser(data.session?.user ?? null);
+      setAuthReady(true);
+    });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSessionUser(session?.user ?? null);
+      setAuthReady(true);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    applyAuthUser(sessionUser, roleMap);
+  }, [applyAuthUser, roleMap, sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser) {
+      setRoleMap({});
+      return;
+    }
+    void loadRoleMapFromSupabase();
+  }, [loadRoleMapFromSupabase, sessionUser]);
 
   useEffect(() => {
     try {
@@ -671,10 +780,12 @@ export default function Page() {
   }, [presets]);
 
   useEffect(() => {
+    if (!authUser) return;
     void loadRecapRows();
-  }, [loadRecapRows]);
+  }, [authUser, loadRecapRows]);
 
   useEffect(() => {
+    if (!authUser) return;
     if (activeSection !== "rekap-penjualan") return;
 
     const channel = supabase
@@ -695,7 +806,7 @@ export default function Page() {
     return () => {
       void supabase.removeChannel(channel);
     };
-  }, [activeSection, loadRecapRows]);
+  }, [activeSection, authUser, loadRecapRows]);
 
   const recapOrderTotals = useMemo(() => {
     return recapOrderItems.reduce(
@@ -1086,7 +1197,95 @@ export default function Page() {
     setRecapOrderItems((prev) => (prev.length > 1 ? prev.filter((item) => item.id !== id) : prev));
   }
 
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthLoading(true);
+    setAuthNotice("");
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim(),
+      password: loginPassword
+    });
+
+    if (error) {
+      setAuthNotice(`Login gagal: ${error.message}`);
+      setAuthLoading(false);
+      return;
+    }
+
+    setLoginPassword("");
+    setAuthNotice("");
+    setAuthLoading(false);
+  }
+
+  async function handleLogout() {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      setAuthNotice(`Gagal logout: ${error.message}`);
+    }
+  }
+
+  async function handleSaveRole() {
+    const emailKey = normalizeEmail(roleTargetEmail);
+    if (!emailKey) {
+      setRoleManageNotice("Isi email user terlebih dahulu.");
+      return;
+    }
+
+    if (emailKey === normalizeEmail(FIXED_ADMIN_EMAIL)) {
+      setRoleManageNotice("Email admin utama sudah otomatis role admin.");
+      return;
+    }
+
+    if (roleTargetValue === "admin") {
+      setRoleManageNotice("Role admin hanya untuk email admin utama.");
+      return;
+    }
+
+    setRoleManageLoading(true);
+    const { error } = await supabase
+      .from(USER_ROLE_TABLE)
+      .upsert([{ email: emailKey, role: roleTargetValue }], { onConflict: "email" });
+
+    if (error) {
+      setRoleManageNotice(`Gagal simpan role: ${error.message}`);
+      setRoleManageLoading(false);
+      return;
+    }
+
+    setRoleMap((prev) => ({ ...prev, [emailKey]: normalizeRole(roleTargetValue) }));
+    setRoleManageNotice(`Role untuk ${emailKey} disimpan sebagai ${roleTargetValue}.`);
+    setRoleTargetEmail("");
+    setRoleTargetValue("viewer");
+    setRoleManageLoading(false);
+  }
+
+  async function handleResetRole(email: string) {
+    const emailKey = normalizeEmail(email);
+    if (!emailKey || emailKey === normalizeEmail(FIXED_ADMIN_EMAIL)) return;
+
+    setRoleManageLoading(true);
+    const { error } = await supabase.from(USER_ROLE_TABLE).delete().eq("email", emailKey);
+    if (error) {
+      setRoleManageNotice(`Gagal reset role: ${error.message}`);
+      setRoleManageLoading(false);
+      return;
+    }
+
+    setRoleMap((prev) => {
+      const next = { ...prev };
+      delete next[emailKey];
+      return next;
+    });
+    setRoleManageNotice(`Role ${emailKey} direset ke viewer (default).`);
+    setRoleManageLoading(false);
+  }
+
   async function addRecapRow() {
+    if (authUser?.role === "viewer") {
+      setRecapNotice("Role viewer hanya bisa melihat data rekap.");
+      return false;
+    }
     if (isRecapSaving) return false;
 
     setIsRecapSaving(true);
@@ -1108,7 +1307,8 @@ export default function Page() {
             { label: "Biaya Layanan Gratis Ongkir XTRA", value: recapShopeeBiayaLayananGratisOngkirXtra },
             { label: "Biaya Program Hemat Biaya Kirim", value: recapShopeeBiayaProgramHematKirim },
             { label: "Biaya Proses Pesanan", value: recapShopeeBiayaProsesPesanan },
-            { label: "Biaya Komisi AMS", value: recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0 }
+            { label: "Biaya Komisi AMS", value: recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0 },
+            { label: "Biaya Premi", value: recapShopeePremiAktif ? recapShopeeBiayaPremi : 0 }
           ].filter((item) => item.value > 0)
         : recapMarketplace === "Tokopedia" || recapMarketplace === "TikTok"
           ? [
@@ -1173,12 +1373,18 @@ export default function Page() {
     setRecapShopeeBiayaProsesPesanan(0);
     setRecapShopeeKomisiAmsAktif(false);
     setRecapShopeeBiayaKomisiAms(0);
+    setRecapShopeePremiAktif(false);
+    setRecapShopeeBiayaPremi(0);
     setRecapCatatan("");
     setIsRecapSaving(false);
     return true;
   }
 
   async function deleteRecapRow(id: string) {
+    if (authUser?.role !== "admin") {
+      setRecapNotice("Hanya role admin yang bisa menghapus data rekap.");
+      return;
+    }
     const { error } = await runSupabaseWithRetry(
       () => supabase.from(RECAP_SUPABASE_TABLE).delete().eq("id", id),
       2
@@ -1238,6 +1444,10 @@ export default function Page() {
   }
 
   async function saveEditRecap() {
+    if (authUser?.role === "viewer") {
+      setRecapNotice("Role viewer tidak punya izin mengubah data.");
+      return;
+    }
     if (!editRecapDraft) return;
 
     const sanitizedBiayaDetail = editRecapDraft.biayaDetail
@@ -1551,13 +1761,15 @@ export default function Page() {
 
   const recapShopeeTotalBiaya = useMemo(() => {
     const komisiAms = recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0;
+    const premi = recapShopeePremiAktif ? recapShopeeBiayaPremi : 0;
     return (
       recapShopeeBiayaAdmin +
       recapShopeeBiayaLayananPromoXtra +
       recapShopeeBiayaLayananGratisOngkirXtra +
       recapShopeeBiayaProgramHematKirim +
       recapShopeeBiayaProsesPesanan +
-      komisiAms
+      komisiAms +
+      premi
     );
   }, [
     recapShopeeBiayaAdmin,
@@ -1566,7 +1778,9 @@ export default function Page() {
     recapShopeeBiayaProgramHematKirim,
     recapShopeeBiayaProsesPesanan,
     recapShopeeKomisiAmsAktif,
-    recapShopeeBiayaKomisiAms
+    recapShopeeBiayaKomisiAms,
+    recapShopeePremiAktif,
+    recapShopeeBiayaPremi
   ]);
 
   const recapMarketplaceTotalBiaya = useMemo(() => {
@@ -1857,6 +2071,77 @@ export default function Page() {
     }
   };
   const activeMeta = sectionMeta[activeSection];
+  const currentRole = authUser?.role ?? null;
+  const allowedSections = currentRole ? ROLE_SECTION_ACCESS[currentRole] : [];
+  const canManageRecap = currentRole === "admin" || currentRole === "staff";
+  const canDeleteRecap = currentRole === "admin";
+  const roleEntries = useMemo(
+    () => Object.entries(roleMap).sort((a, b) => a[0].localeCompare(b[0])),
+    [roleMap]
+  );
+
+  useEffect(() => {
+    if (!currentRole) return;
+    if (allowedSections.includes(activeSection)) return;
+    setActiveSection(allowedSections[0] ?? "rekap-penjualan");
+  }, [activeSection, allowedSections, currentRole]);
+
+  useEffect(() => {
+    if (!currentRole) return;
+    if (canManageRecap) return;
+    setRecapMenu("hasil");
+  }, [canManageRecap, currentRole]);
+
+  if (!authReady) {
+    return (
+      <main className="mx-auto my-10 w-[92vw] max-w-md">
+        <div className="card-shell p-6 text-center">
+          <p className="text-sm font-medium text-slate-700">Memuat autentikasi...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <main className="mx-auto my-10 w-[92vw] max-w-md">
+        <div className="card-shell p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Starcomp Login</p>
+          <h1 className="mt-1 text-lg font-bold text-slate-900">Masuk ke Dashboard Marketplace</h1>
+          <form onSubmit={handleLogin} className="mt-4 grid gap-3">
+            <label className="grid gap-1 text-sm text-slate-600">
+              <span>Email</span>
+              <input
+                type="email"
+                required
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                className="w-full rounded-2xl border border-stone-200 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+              />
+            </label>
+            <label className="grid gap-1 text-sm text-slate-600">
+              <span>Password</span>
+              <input
+                type="password"
+                required
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                className="w-full rounded-2xl border border-stone-200 bg-white px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {authLoading ? "Memproses..." : "Login"}
+            </button>
+          </form>
+          {authNotice ? <p className="mt-3 text-xs text-rose-600">{authNotice}</p> : null}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="animate-fade-up relative mx-auto my-6 w-[94vw] max-w-[1320px] overflow-hidden">
@@ -1867,14 +2152,31 @@ export default function Page() {
       <header className="relative mb-4 overflow-hidden rounded-3xl border border-stone-200 bg-white/85 px-4 py-4 shadow-sm backdrop-blur-md md:px-6">
         <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-gradient-to-l from-stone-100/80 to-transparent md:block" />
         <div className="relative z-10 flex flex-col gap-3">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Starcomp Sales Toolkit</p>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-3xl">
-              Sistem Pembantu Penjualan 3 Marketplace
-            </h1>
-            <p className="mt-1 text-sm text-slate-600">
-              Simulasi biaya Tokopedia, Shopee, dan Tokopedia Mall dalam satu dashboard yang lebih dinamis.
-            </p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Starcomp Sales Toolkit</p>
+              <h1 className="text-xl font-bold tracking-tight text-slate-900 md:text-3xl">
+                Sistem Pembantu Penjualan 3 Marketplace
+              </h1>
+              <p className="mt-1 text-sm text-slate-600">
+                Simulasi biaya Tokopedia, Shopee, dan Tokopedia Mall dalam satu dashboard yang lebih dinamis.
+              </p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-white/90 px-3 py-2 text-xs text-slate-600">
+              <p>
+                Login: <strong className="text-slate-900">{authUser.email}</strong>
+              </p>
+              <p>
+                Role: <strong className="uppercase text-slate-900">{authUser.role}</strong>
+              </p>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="mt-1 rounded-xl border border-stone-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
+              >
+                Logout
+              </button>
+            </div>
           </div>
           {activeSection === "kalkulator-potongan" ? (
             <div className="grid gap-2 md:grid-cols-3">
@@ -1912,40 +2214,99 @@ export default function Page() {
         <aside className="card-shell h-fit p-3 lg:sticky lg:top-4">
           <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
           <nav className="grid gap-2 text-sm">
-            <button
-              type="button"
-              onClick={() => setActiveSection("kalkulator-potongan")}
-              className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
-                activeSection === "kalkulator-potongan"
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                  : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
-              }`}
-            >
-              Kalkulator Potongan
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSection("pembuatan-nota")}
-              className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
-                activeSection === "pembuatan-nota"
-                  ? "border-orange-300 bg-orange-50 text-orange-700"
-                  : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
-              }`}
-            >
-              Pembuatan Nota/Faktur
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveSection("rekap-penjualan")}
-              className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
-                activeSection === "rekap-penjualan"
-                  ? "border-sky-300 bg-sky-50 text-sky-700"
-                  : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
-              }`}
-            >
-              Rekap Penjualan Marketplace
-            </button>
+            {allowedSections.includes("kalkulator-potongan") ? (
+              <button
+                type="button"
+                onClick={() => setActiveSection("kalkulator-potongan")}
+                className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
+                  activeSection === "kalkulator-potongan"
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                }`}
+              >
+                Kalkulator Potongan
+              </button>
+            ) : null}
+            {allowedSections.includes("pembuatan-nota") ? (
+              <button
+                type="button"
+                onClick={() => setActiveSection("pembuatan-nota")}
+                className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
+                  activeSection === "pembuatan-nota"
+                    ? "border-orange-300 bg-orange-50 text-orange-700"
+                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                }`}
+              >
+                Pembuatan Nota/Faktur
+              </button>
+            ) : null}
+            {allowedSections.includes("rekap-penjualan") ? (
+              <button
+                type="button"
+                onClick={() => setActiveSection("rekap-penjualan")}
+                className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
+                  activeSection === "rekap-penjualan"
+                    ? "border-sky-300 bg-sky-50 text-sky-700"
+                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                }`}
+              >
+                Rekap Penjualan Marketplace
+              </button>
+            ) : null}
           </nav>
+
+          {currentRole === "admin" ? (
+            <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/90 p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Manajemen Role</p>
+              <p className="mt-1 text-[11px] text-slate-600">User baru otomatis viewer. Admin hanya untuk email utama.</p>
+              <div className="mt-2 grid gap-2">
+                <input
+                  type="email"
+                  placeholder="Email user"
+                  value={roleTargetEmail}
+                  onChange={(e) => setRoleTargetEmail(e.target.value)}
+                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                />
+                <select
+                  value={roleTargetValue}
+                  onChange={(e) => setRoleTargetValue(e.target.value as UserRole)}
+                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                >
+                  <option value="viewer">viewer</option>
+                  <option value="staff">staff</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={handleSaveRole}
+                  disabled={roleManageLoading}
+                  className="rounded-xl border border-stone-300 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {roleManageLoading ? "Menyimpan..." : "Simpan Role"}
+                </button>
+              </div>
+              {roleManageNotice ? <p className="mt-2 text-[11px] text-slate-600">{roleManageNotice}</p> : null}
+              <div className="mt-2 space-y-1.5">
+                <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[11px]">
+                  <span className="truncate text-emerald-800">{normalizeEmail(FIXED_ADMIN_EMAIL)}</span>
+                  <strong className="uppercase text-emerald-700">admin</strong>
+                </div>
+                {roleEntries.map(([email, role]) => (
+                  <div key={`role-${email}`} className="flex items-center gap-1 rounded-xl border border-stone-200 bg-white px-2 py-1.5 text-[11px]">
+                    <span className="flex-1 truncate text-slate-700">{email}</span>
+                    <strong className="uppercase text-slate-900">{role}</strong>
+                    <button
+                      type="button"
+                      onClick={() => handleResetRole(email)}
+                      disabled={roleManageLoading}
+                      className="rounded-lg border border-stone-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </aside>
 
         <div className="space-y-5">
@@ -2472,18 +2833,25 @@ export default function Page() {
             <p className="text-xs text-slate-500">Pisahkan menu input dan hasil agar data tidak tercampur.</p>
           </div>
           {recapNotice ? <p className="mb-3 text-xs text-slate-600">{recapNotice}</p> : null}
+          {!canManageRecap ? (
+            <p className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
+              Akun role `viewer` hanya bisa melihat hasil rekap.
+            </p>
+          ) : null}
           <div className="mb-4 grid gap-2 sm:w-fit sm:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => setRecapMenu("input")}
-              className={`rounded-2xl border px-3 py-2 text-sm font-medium transition ${
-                recapMenu === "input"
-                  ? "border-stone-700 bg-slate-900 text-white"
-                  : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
-              }`}
-            >
-              Input Rekap
-            </button>
+            {canManageRecap ? (
+              <button
+                type="button"
+                onClick={() => setRecapMenu("input")}
+                className={`rounded-2xl border px-3 py-2 text-sm font-medium transition ${
+                  recapMenu === "input"
+                    ? "border-stone-700 bg-slate-900 text-white"
+                    : "border-stone-200 bg-stone-50 text-slate-700 hover:bg-stone-100"
+                }`}
+              >
+                Input Rekap
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setRecapMenu("hasil")}
@@ -2635,6 +3003,21 @@ export default function Page() {
                       value={recapShopeeKomisiAmsAktif ? recapShopeeBiayaKomisiAms : 0}
                       onChange={(e) => setRecapShopeeBiayaKomisiAms(Number(e.target.value || 0))}
                       disabled={!recapShopeeKomisiAmsAktif}
+                      className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition disabled:cursor-not-allowed disabled:bg-stone-100 focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </div>
+                  <div className="grid gap-1.5 rounded-2xl border border-stone-200 bg-stone-50/80 p-3 text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">Biaya Premi</span>
+                    <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input type="checkbox" checked={recapShopeePremiAktif} onChange={(e) => setRecapShopeePremiAktif(e.target.checked)} />
+                      Premi aktif (jika ada)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={recapShopeePremiAktif ? recapShopeeBiayaPremi : 0}
+                      onChange={(e) => setRecapShopeeBiayaPremi(Number(e.target.value || 0))}
+                      disabled={!recapShopeePremiAktif}
                       className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition disabled:cursor-not-allowed disabled:bg-stone-100 focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
                     />
                   </div>
@@ -2838,9 +3221,11 @@ export default function Page() {
                             <button type="button" onClick={() => setOpenBiayaDetailRow(row)} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
                               Detail Biaya
                             </button>
-                            <button type="button" onClick={() => deleteRecapRow(row.id)} className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
-                              Hapus
-                            </button>
+                            {canDeleteRecap ? (
+                              <button type="button" onClick={() => deleteRecapRow(row.id)} className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                                Hapus
+                              </button>
+                            ) : null}
                           </div>
                         </td>
                       </tr>
