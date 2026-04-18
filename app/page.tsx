@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 
@@ -68,6 +68,13 @@ type RecapOrderItem = {
   qty: number;
 };
 
+type RecapOrderSnapshot = {
+  nama: string;
+  hargaJual: number;
+  modal: number;
+  qty: number;
+};
+
 type RecapBiayaItem = {
   label: string;
   value: number;
@@ -77,6 +84,10 @@ type RecapEditDraft = {
   id: string;
   tanggal: string;
   marketplace: SalesRecapRow["marketplace"];
+  status: SalesRecapRow["status"];
+  alasanCancel: string;
+  nominalCancel: number;
+  orderItems: RecapOrderSnapshot[];
   noPesanan: string;
   pelanggan: string;
   omzet: number;
@@ -95,6 +106,12 @@ type SalesRecapRow = {
   id: string;
   tanggal: string;
   marketplace: "Tokopedia" | "Shopee" | "TikTok";
+  status: "sukses" | "cancel";
+  alasanCancel: string;
+  nominalCancel: number;
+  tanggalCancel: string | null;
+  createdAt: string | null;
+  orderItems: RecapOrderSnapshot[];
   noPesanan: string;
   pelanggan: string;
   omzet: number;
@@ -209,6 +226,19 @@ function getSupabaseErrorInfo(error: unknown) {
   };
 }
 
+function isMissingColumnError(error: unknown, columnName: string) {
+  if (!error || typeof error !== "object") return false;
+  const e = error as Record<string, unknown>;
+  const message = String(e.message ?? "").toLowerCase();
+  const details = String(e.details ?? "").toLowerCase();
+  const col = columnName.toLowerCase();
+  return (
+    message.includes("column") &&
+    message.includes(col) &&
+    (message.includes("does not exist") || message.includes("not found") || details.includes("schema cache"))
+  );
+}
+
 function formatSupabaseError(action: string, error: unknown) {
   const { code, message } = getSupabaseErrorInfo(error);
   const codeUpper = code.toUpperCase();
@@ -268,6 +298,23 @@ function normalizeRecapRow(value: unknown): SalesRecapRow | null {
         : "Tokopedia";
 
   const biayaTotal = toSafeNumber(it.ongkir ?? it.biaya);
+  const rawOrderItems = it.orderItems ?? it.order_items;
+  const orderItems = Array.isArray(rawOrderItems)
+    ? rawOrderItems
+        .map((entry) => {
+          if (typeof entry !== "object" || entry === null) return null;
+          const e = entry as Record<string, unknown>;
+          const nama = typeof e.nama === "string" ? e.nama.trim() : "";
+          if (!nama) return null;
+          return {
+            nama,
+            hargaJual: toSafeNumber(e.hargaJual ?? e.harga_jual),
+            modal: toSafeNumber(e.modal),
+            qty: Math.max(0, Number(e.qty ?? 0) || 0)
+          } satisfies RecapOrderSnapshot;
+        })
+        .filter((item): item is RecapOrderSnapshot => Boolean(item))
+    : [];
   const rawBiayaDetail = it.biayaDetail ?? it.biaya_detail;
   const biayaDetail = Array.isArray(rawBiayaDetail)
     ? rawBiayaDetail
@@ -286,6 +333,27 @@ function normalizeRecapRow(value: unknown): SalesRecapRow | null {
     id: typeof it.id === "string" ? it.id : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     tanggal: typeof it.tanggal === "string" ? it.tanggal : new Date().toISOString().slice(0, 10),
     marketplace: marketplaceValue as SalesRecapRow["marketplace"],
+    status: it.status === "cancel" ? "cancel" : "sukses",
+    alasanCancel:
+      typeof it.alasanCancel === "string"
+        ? it.alasanCancel
+        : typeof it.alasan_cancel === "string"
+          ? it.alasan_cancel
+          : "",
+    nominalCancel: toSafeNumber(it.nominalCancel ?? it.nominal_cancel),
+    tanggalCancel:
+      typeof it.tanggalCancel === "string"
+        ? it.tanggalCancel
+        : typeof it.tanggal_cancel === "string"
+          ? it.tanggal_cancel
+          : null,
+    createdAt:
+      typeof it.createdAt === "string"
+        ? it.createdAt
+        : typeof it.created_at === "string"
+          ? it.created_at
+          : null,
+    orderItems,
     noPesanan:
       typeof it.noPesanan === "string"
         ? it.noPesanan
@@ -325,11 +393,15 @@ function writeRecapCache(rows: SalesRecapRow[]) {
   }
 }
 
-function toRecapDbPayload(row: SalesRecapRow) {
-  return {
+function toRecapDbPayload(row: SalesRecapRow, includeOrderItems = true) {
+  const basePayload = {
     id: row.id,
     tanggal: row.tanggal,
     marketplace: row.marketplace,
+    status: row.status,
+    alasan_cancel: row.alasanCancel,
+    nominal_cancel: row.nominalCancel,
+    tanggal_cancel: row.tanggalCancel,
     no_pesanan: row.noPesanan,
     pelanggan: row.pelanggan,
     omzet: row.omzet,
@@ -337,6 +409,11 @@ function toRecapDbPayload(row: SalesRecapRow) {
     ongkir: row.ongkir,
     biaya_detail: row.biayaDetail,
     catatan: row.catatan
+  };
+  if (!includeOrderItems) return basePayload;
+  return {
+    ...basePayload,
+    order_items: row.orderItems
   };
 }
 
@@ -737,6 +814,7 @@ export default function Page() {
   const [recapCatatan, setRecapCatatan] = useState("");
   const [recapRows, setRecapRows] = useState<SalesRecapRow[]>([]);
   const [recapFilterMarketplace, setRecapFilterMarketplace] = useState<"Semua" | SalesRecapRow["marketplace"]>("Semua");
+  const [recapFilterStatus, setRecapFilterStatus] = useState<"Semua" | SalesRecapRow["status"]>("Semua");
   const [recapFilterStartDate, setRecapFilterStartDate] = useState("");
   const [recapFilterEndDate, setRecapFilterEndDate] = useState("");
   const [recapFilterQuery, setRecapFilterQuery] = useState("");
@@ -747,6 +825,14 @@ export default function Page() {
   const [recapMenu, setRecapMenu] = useState<"input" | "hasil">("input");
   const [openBiayaDetailRow, setOpenBiayaDetailRow] = useState<SalesRecapRow | null>(null);
   const [editRecapDraft, setEditRecapDraft] = useState<RecapEditDraft | null>(null);
+  const [cancelDraftRow, setCancelDraftRow] = useState<SalesRecapRow | null>(null);
+  const [cancelDraftClosingId, setCancelDraftClosingId] = useState<string | null>(null);
+  const [cancelDraftReason, setCancelDraftReason] = useState("");
+  const [cancelDraftNominal, setCancelDraftNominal] = useState(0);
+  const [cancelStatusSaving, setCancelStatusSaving] = useState(false);
+  const [cancelTrendDays, setCancelTrendDays] = useState<7 | 14 | 30 | "all">(7);
+  const [supportsOrderItemsColumn, setSupportsOrderItemsColumn] = useState(true);
+  const cancelDraftCloseTimerRef = useRef<number | null>(null);
 
   const currentPresetData: PresetData = {
     tokopediaFee,
@@ -1662,6 +1748,19 @@ export default function Page() {
         id: createRecapRowId(),
         tanggal: recapTanggal,
         marketplace: recapMarketplace,
+        status: "sukses",
+        alasanCancel: "",
+        nominalCancel: 0,
+        tanggalCancel: null,
+        createdAt: new Date().toISOString(),
+        orderItems: recapOrderItems
+          .map((item) => ({
+            nama: item.nama.trim(),
+            hargaJual: Math.max(0, Number(item.hargaJual) || 0),
+            modal: Math.max(0, Number(item.modal) || 0),
+            qty: Math.max(0, Number(item.qty) || 0)
+          }))
+          .filter((item) => item.nama && item.qty > 0),
         noPesanan: recapNoPesanan,
         pelanggan: recapPelanggan,
         omzet: Math.max(0, recapOmzet),
@@ -1671,11 +1770,21 @@ export default function Page() {
         catatan: recapCatatan
       };
 
-      let insertResult = await runSupabaseWithRetry(() => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]), 2);
+      let insertResult = await runSupabaseWithRetry(
+        () => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row, supportsOrderItemsColumn)]),
+        2
+      );
+      if (insertResult.error && supportsOrderItemsColumn && isMissingColumnError(insertResult.error, "order_items")) {
+        setSupportsOrderItemsColumn(false);
+        insertResult = await runSupabaseWithRetry(
+          () => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row, false)]),
+          2
+        );
+      }
       if (insertResult.error && isDuplicateIdError(insertResult.error)) {
         row = { ...row, id: createRecapRowId() };
         insertResult = await runSupabaseWithRetry(
-          () => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row)]),
+          () => supabase.from(RECAP_SUPABASE_TABLE).insert([toRecapDbPayload(row, supportsOrderItemsColumn)]),
           1
         );
       }
@@ -1744,6 +1853,11 @@ export default function Page() {
     });
     setOpenBiayaDetailRow((prev) => (prev && prev.id === id ? null : prev));
     setEditRecapDraft((prev) => (prev && prev.id === id ? null : prev));
+    if (cancelDraftRow?.id === id) {
+      closeCancelDraft(true);
+    } else {
+      setCancelDraftRow((prev) => (prev && prev.id === id ? null : prev));
+    }
     setRecapNotice("Data rekap berhasil dihapus.");
   }
 
@@ -1753,10 +1867,15 @@ export default function Page() {
       return;
     }
     setOpenBiayaDetailRow(null);
+    closeCancelDraft(true);
     setEditRecapDraft({
       id: row.id,
       tanggal: row.tanggal,
       marketplace: row.marketplace,
+      status: row.status,
+      alasanCancel: row.alasanCancel,
+      nominalCancel: Math.max(0, Number(row.nominalCancel) || 0),
+      orderItems: row.orderItems.length ? row.orderItems.map((item) => ({ ...item })) : [],
       noPesanan: row.noPesanan,
       pelanggan: row.pelanggan,
       omzet: row.omzet,
@@ -1815,6 +1934,12 @@ export default function Page() {
       id: editRecapDraft.id,
       tanggal: editRecapDraft.tanggal,
       marketplace: editRecapDraft.marketplace,
+      status: editRecapDraft.status,
+      alasanCancel: editRecapDraft.status === "cancel" ? editRecapDraft.alasanCancel.trim() : "",
+      nominalCancel: editRecapDraft.status === "cancel" ? Math.max(0, Number(editRecapDraft.nominalCancel) || 0) : 0,
+      tanggalCancel: editRecapDraft.status === "cancel" ? new Date().toISOString() : null,
+      createdAt: recapRows.find((row) => row.id === editRecapDraft.id)?.createdAt ?? null,
+      orderItems: editRecapDraft.orderItems.length ? editRecapDraft.orderItems.map((item) => ({ ...item })) : [],
       noPesanan: editRecapDraft.noPesanan,
       pelanggan: editRecapDraft.pelanggan,
       omzet: Math.max(0, Number(editRecapDraft.omzet) || 0),
@@ -1824,16 +1949,27 @@ export default function Page() {
       catatan: editRecapDraft.catatan
     };
 
-    const { error } = await runSupabaseWithRetry(
+    let updateResult = await runSupabaseWithRetry(
       () =>
         supabase
           .from(RECAP_SUPABASE_TABLE)
-          .update(toRecapDbPayload(updatedRow))
+          .update(toRecapDbPayload(updatedRow, supportsOrderItemsColumn))
           .eq("id", updatedRow.id),
       2
     );
-    if (error) {
-      setRecapNotice(formatSupabaseError("Memperbarui data rekap", error));
+    if (updateResult.error && supportsOrderItemsColumn && isMissingColumnError(updateResult.error, "order_items")) {
+      setSupportsOrderItemsColumn(false);
+      updateResult = await runSupabaseWithRetry(
+        () =>
+          supabase
+            .from(RECAP_SUPABASE_TABLE)
+            .update(toRecapDbPayload(updatedRow, false))
+            .eq("id", updatedRow.id),
+        2
+      );
+    }
+    if (updateResult.error) {
+      setRecapNotice(formatSupabaseError("Memperbarui data rekap", updateResult.error));
       return;
     }
 
@@ -1845,6 +1981,149 @@ export default function Page() {
     setOpenBiayaDetailRow((prev) => (prev && prev.id === updatedRow.id ? updatedRow : prev));
     setEditRecapDraft(null);
     setRecapNotice("Data rekap berhasil diperbarui di Supabase.");
+  }
+
+  async function toggleRecapCancelStatus(row: SalesRecapRow) {
+    if (authUser?.role === "viewer") {
+      setRecapNotice("Role viewer tidak punya izin mengubah status transaksi.");
+      return;
+    }
+    if (cancelStatusSaving) return;
+
+    if (row.status === "cancel") {
+      await applyRecapCancelStatus(row, "sukses", "", 0);
+      return;
+    }
+
+    if (cancelDraftRow?.id === row.id) {
+      closeCancelDraft();
+      return;
+    }
+
+    if (cancelDraftCloseTimerRef.current !== null) {
+      window.clearTimeout(cancelDraftCloseTimerRef.current);
+      cancelDraftCloseTimerRef.current = null;
+    }
+    setCancelDraftClosingId(null);
+    setCancelDraftRow(row);
+    setCancelDraftReason(row.alasanCancel || "");
+    setCancelDraftNominal(Math.max(0, Number(row.nominalCancel) || 0));
+  }
+
+  async function applyRecapCancelStatus(
+    row: SalesRecapRow,
+    nextStatus: SalesRecapRow["status"],
+    reason: string,
+    nominalCancel: number
+  ) {
+    const updatedRow: SalesRecapRow = {
+      ...row,
+      status: nextStatus,
+      alasanCancel: nextStatus === "cancel" ? reason.trim() : "",
+      nominalCancel: nextStatus === "cancel" ? Math.max(0, Number(nominalCancel) || 0) : 0,
+      tanggalCancel: nextStatus === "cancel" ? new Date().toISOString() : null
+    };
+
+    setCancelStatusSaving(true);
+    let updateResult = await runSupabaseWithRetry(
+      () =>
+        supabase
+          .from(RECAP_SUPABASE_TABLE)
+          .update(toRecapDbPayload(updatedRow, supportsOrderItemsColumn))
+          .eq("id", row.id),
+      2
+    );
+
+    if (updateResult.error && supportsOrderItemsColumn && isMissingColumnError(updateResult.error, "order_items")) {
+      setSupportsOrderItemsColumn(false);
+      updateResult = await runSupabaseWithRetry(
+        () =>
+          supabase
+            .from(RECAP_SUPABASE_TABLE)
+            .update(toRecapDbPayload(updatedRow, false))
+            .eq("id", row.id),
+        2
+      );
+    }
+
+    if (updateResult.error) {
+      setRecapNotice(formatSupabaseError("Mengubah status cancel transaksi", updateResult.error));
+      setCancelStatusSaving(false);
+      return false;
+    }
+
+    setRecapRows((prev) => {
+      const next = prev.map((it) => (it.id === updatedRow.id ? updatedRow : it));
+      writeRecapCache(next);
+      return next;
+    });
+    setOpenBiayaDetailRow((prev) => (prev && prev.id === updatedRow.id ? updatedRow : prev));
+    setCancelStatusSaving(false);
+    setRecapNotice(
+      nextStatus === "cancel"
+        ? "Transaksi ditandai sebagai cancel."
+        : "Status transaksi berhasil dikembalikan ke sukses."
+    );
+    return true;
+  }
+
+  async function confirmRecapCancel() {
+    if (!cancelDraftRow) return;
+    const ok = await applyRecapCancelStatus(
+      cancelDraftRow,
+      "cancel",
+      cancelDraftReason,
+      cancelDraftNominal
+    );
+    if (!ok) return;
+    closeCancelDraft();
+  }
+
+  function closeCancelDraft(immediate = false) {
+    if (cancelDraftCloseTimerRef.current !== null) {
+      window.clearTimeout(cancelDraftCloseTimerRef.current);
+      cancelDraftCloseTimerRef.current = null;
+    }
+
+    if (!cancelDraftRow || immediate) {
+      setCancelDraftClosingId(null);
+      setCancelDraftRow(null);
+      setCancelDraftReason("");
+      setCancelDraftNominal(0);
+      return;
+    }
+
+    const closingId = cancelDraftRow.id;
+    setCancelDraftClosingId(closingId);
+    cancelDraftCloseTimerRef.current = window.setTimeout(() => {
+      setCancelDraftClosingId(null);
+      setCancelDraftRow(null);
+      setCancelDraftReason("");
+      setCancelDraftNominal(0);
+      cancelDraftCloseTimerRef.current = null;
+    }, 240);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (cancelDraftCloseTimerRef.current !== null) {
+        window.clearTimeout(cancelDraftCloseTimerRef.current);
+      }
+    };
+  }, []);
+
+  function isCancelDraftVisibleForRow(rowId: string) {
+    return cancelDraftRow?.id === rowId || cancelDraftClosingId === rowId;
+  }
+
+  function isCancelDraftOpenForRow(rowId: string) {
+    return cancelDraftRow?.id === rowId;
+  }
+
+  function getCancelDraftPanelClass(rowId: string) {
+    return isCancelDraftOpenForRow(rowId)
+      ? "cancel-inline-panel cancel-inline-panel-open"
+      : "cancel-inline-panel cancel-inline-panel-close";
   }
 
   function exportRecapPdf() {
@@ -1859,28 +2138,38 @@ export default function Page() {
       return;
     }
 
-    const summary = byPeriodRows.reduce(
+    const suksesRows = byPeriodRows.filter((row) => row.status === "sukses");
+    const cancelRows = byPeriodRows.filter((row) => row.status === "cancel");
+
+    const summary = suksesRows.reduce(
       (acc, row) => {
         acc.omzet += row.omzet;
         acc.modal += row.modal;
         acc.biaya += row.ongkir;
         acc.laba += row.omzet - row.modal - row.ongkir;
-        acc.transaksi += 1;
+        acc.transaksiSukses += 1;
         return acc;
       },
-      { omzet: 0, modal: 0, biaya: 0, laba: 0, transaksi: 0 }
+      { omzet: 0, modal: 0, biaya: 0, laba: 0, transaksiSukses: 0 }
     );
+    const totalBiayaCancel = cancelRows.reduce((acc, row) => acc + Math.max(0, Number(row.nominalCancel) || 0), 0);
+    const labaFinal = summary.laba - totalBiayaCancel;
 
-    const byMarketplace: Record<SalesRecapRow["marketplace"], { omzet: number; laba: number; transaksi: number }> = {
-      Tokopedia: { omzet: 0, laba: 0, transaksi: 0 },
-      Shopee: { omzet: 0, laba: 0, transaksi: 0 },
-      TikTok: { omzet: 0, laba: 0, transaksi: 0 }
+    const byMarketplace: Record<SalesRecapRow["marketplace"], { omzet: number; laba: number; transaksi: number; cancel: number; biayaCancel: number }> = {
+      Tokopedia: { omzet: 0, laba: 0, transaksi: 0, cancel: 0, biayaCancel: 0 },
+      Shopee: { omzet: 0, laba: 0, transaksi: 0, cancel: 0, biayaCancel: 0 },
+      TikTok: { omzet: 0, laba: 0, transaksi: 0, cancel: 0, biayaCancel: 0 }
     };
 
     for (const row of byPeriodRows) {
+      byMarketplace[row.marketplace].transaksi += 1;
+      if (row.status === "cancel") {
+        byMarketplace[row.marketplace].cancel += 1;
+        byMarketplace[row.marketplace].biayaCancel += Math.max(0, Number(row.nominalCancel) || 0);
+        continue;
+      }
       byMarketplace[row.marketplace].omzet += row.omzet;
       byMarketplace[row.marketplace].laba += row.omzet - row.modal - row.ongkir;
-      byMarketplace[row.marketplace].transaksi += 1;
     }
 
     const idDateFormatter = new Intl.DateTimeFormat("id-ID", {
@@ -1907,19 +2196,25 @@ export default function Page() {
 
     const rowsHtml = byPeriodRows
       .map((row, idx) => {
-        const laba = row.omzet - row.modal - row.ongkir;
+        const labaSukses = row.omzet - row.modal - row.ongkir;
+        const labaFinalTransaksi = labaSukses - row.nominalCancel;
+        const statusLabel = row.status === "cancel" ? "Cancel" : "Sukses";
         return `
-          <tr>
+          <tr class="${row.status === "cancel" ? "cancel-row" : ""}">
             <td>${idx + 1}</td>
             <td>${escapeHtml(row.tanggal)}</td>
             <td>${escapeHtml(row.marketplace)}</td>
+            <td><span class="status-badge ${row.status === "cancel" ? "status-cancel" : "status-success"}">${escapeHtml(statusLabel)}</span></td>
             <td>${escapeHtml(row.noPesanan || "-")}</td>
             <td>${escapeHtml(row.pelanggan || "-")}</td>
             <td class="num">${rupiah(row.omzet)}</td>
             <td class="num">${rupiah(row.modal)}</td>
             <td class="num">${rupiah(row.ongkir)}</td>
-            <td class="num ${laba < 0 ? "neg" : ""}">${rupiah(laba)}</td>
+            <td class="num ${row.nominalCancel > 0 ? "neg" : ""}">${rupiah(row.nominalCancel)}</td>
+            <td class="num ${labaSukses < 0 ? "neg" : ""}">${rupiah(labaSukses)}</td>
+            <td class="num ${labaFinalTransaksi < 0 ? "neg" : ""}">${rupiah(labaFinalTransaksi)}</td>
             <td>${escapeHtml(row.catatan || "-")}</td>
+            <td>${escapeHtml(row.alasanCancel || "-")}</td>
           </tr>
         `;
       })
@@ -1934,7 +2229,7 @@ export default function Page() {
           body { font-family: Arial, sans-serif; color: #0f172a; margin: 20px; }
           h1 { margin: 0 0 4px; font-size: 20px; }
           p { margin: 0 0 4px; font-size: 12px; color: #334155; }
-          .summary { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 8px; margin: 14px 0; }
+          .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 14px 0; }
           .box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; }
           .box b { display: block; font-size: 13px; margin-top: 4px; color: #0f172a; }
           .market { margin: 12px 0; }
@@ -1945,6 +2240,10 @@ export default function Page() {
           .data th, .data td { border: 1px solid #e2e8f0; padding: 6px 8px; font-size: 11px; vertical-align: top; }
           .data thead { background: #f1f5f9; }
           .data td.num, .data th.num { text-align: right; }
+          .cancel-row td { background: #fff1f2; }
+          .status-badge { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 10px; font-weight: 700; }
+          .status-success { background: #dcfce7; color: #166534; }
+          .status-cancel { background: #ffe4e6; color: #be123c; }
           .neg { color: #be123c; }
         </style>
       </head>
@@ -1954,11 +2253,15 @@ export default function Page() {
         <p>Tanggal cetak: ${escapeHtml(idDateFormatter.format(new Date()))}</p>
 
         <div class="summary">
-          <div class="box">Total Transaksi<b>${summary.transaksi}</b></div>
+          <div class="box">Total Transaksi<b>${byPeriodRows.length}</b></div>
+          <div class="box">Transaksi Sukses<b>${summary.transaksiSukses}</b></div>
+          <div class="box">Transaksi Cancel<b>${cancelRows.length}</b></div>
           <div class="box">Total Omzet<b>${rupiah(summary.omzet)}</b></div>
           <div class="box">Total Modal<b>${rupiah(summary.modal)}</b></div>
           <div class="box">Total Biaya<b>${rupiah(summary.biaya)}</b></div>
           <div class="box">Laba Bersih<b class="${summary.laba < 0 ? "neg" : ""}">${rupiah(summary.laba)}</b></div>
+          <div class="box">Biaya Cancel<b class="${totalBiayaCancel > 0 ? "neg" : ""}">${rupiah(totalBiayaCancel)}</b></div>
+          <div class="box">Laba Final<b class="${labaFinal < 0 ? "neg" : ""}">${rupiah(labaFinal)}</b></div>
         </div>
 
         <div class="market">
@@ -1967,14 +2270,16 @@ export default function Page() {
               <tr>
                 <th>Marketplace</th>
                 <th class="num">Transaksi</th>
+                <th class="num">Cancel</th>
+                <th class="num">Biaya Cancel</th>
                 <th class="num">Omzet</th>
                 <th class="num">Laba</th>
               </tr>
             </thead>
             <tbody>
-              <tr><td>Tokopedia</td><td class="num">${byMarketplace.Tokopedia.transaksi}</td><td class="num">${rupiah(byMarketplace.Tokopedia.omzet)}</td><td class="num ${byMarketplace.Tokopedia.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.Tokopedia.laba)}</td></tr>
-              <tr><td>Shopee</td><td class="num">${byMarketplace.Shopee.transaksi}</td><td class="num">${rupiah(byMarketplace.Shopee.omzet)}</td><td class="num ${byMarketplace.Shopee.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.Shopee.laba)}</td></tr>
-              <tr><td>TikTok</td><td class="num">${byMarketplace.TikTok.transaksi}</td><td class="num">${rupiah(byMarketplace.TikTok.omzet)}</td><td class="num ${byMarketplace.TikTok.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.TikTok.laba)}</td></tr>
+              <tr><td>Tokopedia</td><td class="num">${byMarketplace.Tokopedia.transaksi}</td><td class="num">${byMarketplace.Tokopedia.cancel}</td><td class="num">${rupiah(byMarketplace.Tokopedia.biayaCancel)}</td><td class="num">${rupiah(byMarketplace.Tokopedia.omzet)}</td><td class="num ${byMarketplace.Tokopedia.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.Tokopedia.laba)}</td></tr>
+              <tr><td>Shopee</td><td class="num">${byMarketplace.Shopee.transaksi}</td><td class="num">${byMarketplace.Shopee.cancel}</td><td class="num">${rupiah(byMarketplace.Shopee.biayaCancel)}</td><td class="num">${rupiah(byMarketplace.Shopee.omzet)}</td><td class="num ${byMarketplace.Shopee.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.Shopee.laba)}</td></tr>
+              <tr><td>TikTok</td><td class="num">${byMarketplace.TikTok.transaksi}</td><td class="num">${byMarketplace.TikTok.cancel}</td><td class="num">${rupiah(byMarketplace.TikTok.biayaCancel)}</td><td class="num">${rupiah(byMarketplace.TikTok.omzet)}</td><td class="num ${byMarketplace.TikTok.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.TikTok.laba)}</td></tr>
             </tbody>
           </table>
         </div>
@@ -1985,13 +2290,17 @@ export default function Page() {
               <th>No</th>
               <th>Tanggal</th>
               <th>Marketplace</th>
+              <th>Status</th>
               <th>No Pesanan</th>
               <th>Pelanggan</th>
               <th class="num">Omzet</th>
               <th class="num">Modal</th>
               <th class="num">Biaya</th>
-              <th class="num">Laba</th>
+              <th class="num">Biaya Cancel</th>
+              <th class="num">Laba (Sukses)</th>
+              <th class="num">Laba Final</th>
               <th>Catatan</th>
+              <th>Alasan Cancel</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
@@ -2016,35 +2325,49 @@ export default function Page() {
 
     return recapRows.filter((row) => {
       const passMarketplace = recapFilterMarketplace === "Semua" ? true : row.marketplace === recapFilterMarketplace;
+      const passStatus = recapFilterStatus === "Semua" ? true : row.status === recapFilterStatus;
       const passStartDate = recapFilterStartDate ? row.tanggal >= recapFilterStartDate : true;
       const passEndDate = recapFilterEndDate ? row.tanggal <= recapFilterEndDate : true;
       const passQuery = query
-        ? `${row.noPesanan} ${row.pelanggan} ${row.catatan}`.toLowerCase().includes(query)
+        ? `${row.noPesanan} ${row.pelanggan} ${row.catatan} ${row.alasanCancel} ${row.nominalCancel}`.toLowerCase().includes(query)
         : true;
 
-      return passMarketplace && passStartDate && passEndDate && passQuery;
+      return passMarketplace && passStatus && passStartDate && passEndDate && passQuery;
     });
-  }, [recapRows, recapFilterMarketplace, recapFilterStartDate, recapFilterEndDate, recapFilterQuery]);
+  }, [recapRows, recapFilterMarketplace, recapFilterStatus, recapFilterStartDate, recapFilterEndDate, recapFilterQuery]);
 
   const recapSummary = useMemo(() => {
-    const omzet = filteredRecapRows.reduce((acc, r) => acc + r.omzet, 0);
-    const modal = filteredRecapRows.reduce((acc, r) => acc + r.modal, 0);
-    const ongkir = filteredRecapRows.reduce((acc, r) => acc + r.ongkir, 0);
+    const suksesRows = filteredRecapRows.filter((r) => r.status === "sukses");
+    const cancelRows = filteredRecapRows.filter((r) => r.status === "cancel");
+    const omzet = suksesRows.reduce((acc, r) => acc + r.omzet, 0);
+    const modal = suksesRows.reduce((acc, r) => acc + r.modal, 0);
+    const ongkir = suksesRows.reduce((acc, r) => acc + r.ongkir, 0);
+    const totalBiayaCancel = cancelRows.reduce((acc, r) => acc + Math.max(0, Number(r.nominalCancel) || 0), 0);
     const laba = omzet - modal - ongkir;
-    return { omzet, modal, ongkir, laba, transaksi: filteredRecapRows.length };
+    const labaFinal = laba - totalBiayaCancel;
+    const transaksi = filteredRecapRows.length;
+    const transaksiSukses = suksesRows.length;
+    const transaksiCancel = cancelRows.length;
+    const cancelRate = transaksi > 0 ? (transaksiCancel / transaksi) * 100 : 0;
+    return { omzet, modal, ongkir, laba, labaFinal, totalBiayaCancel, transaksi, transaksiSukses, transaksiCancel, cancelRate };
   }, [filteredRecapRows]);
 
   const recapByMarketplace = useMemo(() => {
-    const groups: Record<SalesRecapRow["marketplace"], { omzet: number; laba: number; transaksi: number }> = {
-      Tokopedia: { omzet: 0, laba: 0, transaksi: 0 },
-      Shopee: { omzet: 0, laba: 0, transaksi: 0 },
-      TikTok: { omzet: 0, laba: 0, transaksi: 0 }
+    const groups: Record<SalesRecapRow["marketplace"], { omzet: number; laba: number; transaksi: number; cancel: number; biayaCancel: number }> = {
+      Tokopedia: { omzet: 0, laba: 0, transaksi: 0, cancel: 0, biayaCancel: 0 },
+      Shopee: { omzet: 0, laba: 0, transaksi: 0, cancel: 0, biayaCancel: 0 },
+      TikTok: { omzet: 0, laba: 0, transaksi: 0, cancel: 0, biayaCancel: 0 }
     };
 
     for (const row of filteredRecapRows) {
+      groups[row.marketplace].transaksi += 1;
+      if (row.status === "cancel") {
+        groups[row.marketplace].cancel += 1;
+        groups[row.marketplace].biayaCancel += Math.max(0, Number(row.nominalCancel) || 0);
+        continue;
+      }
       groups[row.marketplace].omzet += row.omzet;
       groups[row.marketplace].laba += row.omzet - row.modal - row.ongkir;
-      groups[row.marketplace].transaksi += 1;
     }
 
     return groups;
@@ -2073,26 +2396,32 @@ export default function Page() {
       );
     }
 
-    const avgOmzet = recapSummary.transaksi > 0 ? recapSummary.omzet / recapSummary.transaksi : 0;
-    const avgLaba = recapSummary.transaksi > 0 ? recapSummary.laba / recapSummary.transaksi : 0;
+    const avgOmzet = recapSummary.transaksiSukses > 0 ? recapSummary.omzet / recapSummary.transaksiSukses : 0;
+    const avgLaba = recapSummary.transaksiSukses > 0 ? recapSummary.laba / recapSummary.transaksiSukses : 0;
     insights.push(`Rata-rata omzet per transaksi: ${rupiah(avgOmzet)}.`);
     insights.push(`Rata-rata laba per transaksi: ${rupiah(avgLaba)}.`);
+    if (recapSummary.transaksiCancel > 0) {
+      insights.push(`Cancel rate: ${recapSummary.cancelRate.toFixed(1)}% (${recapSummary.transaksiCancel} transaksi cancel).`);
+      insights.push(`Total biaya cancel: ${rupiah(recapSummary.totalBiayaCancel)}.`);
+      insights.push(`Laba final setelah biaya cancel: ${rupiah(recapSummary.labaFinal)}.`);
+    }
 
     const ratioBiaya = recapSummary.omzet > 0 ? (recapSummary.ongkir / recapSummary.omzet) * 100 : 0;
     insights.push(`Rasio biaya terhadap omzet: ${ratioBiaya.toFixed(1)}%.`);
 
-    const rugiCount = filteredRecapRows.filter((row) => row.omzet - row.modal - row.ongkir < 0).length;
+    const suksesRows = filteredRecapRows.filter((row) => row.status === "sukses");
+    const rugiCount = suksesRows.filter((row) => row.omzet - row.modal - row.ongkir < 0).length;
     if (rugiCount > 0) {
       insights.push(`Ada ${rugiCount} transaksi rugi, cek detail biaya untuk menekan kebocoran margin.`);
     }
 
-    const highCostCount = filteredRecapRows.filter((row) => row.omzet > 0 && row.ongkir / row.omzet >= 0.2).length;
+    const highCostCount = suksesRows.filter((row) => row.omzet > 0 && row.ongkir / row.omzet >= 0.2).length;
     if (highCostCount > 0) {
       insights.push(`Ada ${highCostCount} transaksi dengan rasio biaya >= 20% dari omzet.`);
     }
 
-    if (filteredRecapRows.length >= 4) {
-      const sortedRows = [...filteredRecapRows].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
+    if (suksesRows.length >= 4) {
+      const sortedRows = [...suksesRows].sort((a, b) => a.tanggal.localeCompare(b.tanggal));
       const half = Math.floor(sortedRows.length / 2);
       const firstHalf = sortedRows.slice(0, half);
       const secondHalf = sortedRows.slice(half);
@@ -2207,6 +2536,247 @@ export default function Page() {
       latestValue,
       deltaPct,
       hasData: points.length > 0
+    };
+  }, [recapRows]);
+
+  const recapCancelTrend = useMemo(() => {
+    const cancelByDate = new Map<string, { count: number; nominal: number }>();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let earliestCancelDate: Date | null = null;
+    let thisWeekCount = 0;
+    let prevWeekCount = 0;
+    let thisWeekNominal = 0;
+    let prevWeekNominal = 0;
+
+    for (const row of recapRows) {
+      if (row.status !== "cancel") continue;
+      const nominal = Math.max(0, Number(row.nominalCancel) || 0);
+      const prev = cancelByDate.get(row.tanggal) ?? { count: 0, nominal: 0 };
+      cancelByDate.set(row.tanggal, { count: prev.count + 1, nominal: prev.nominal + nominal });
+
+      const dateObj = new Date(`${row.tanggal}T00:00:00`);
+      if (Number.isNaN(dateObj.getTime())) continue;
+      if (!earliestCancelDate || dateObj.getTime() < earliestCancelDate.getTime()) {
+        earliestCancelDate = dateObj;
+      }
+    }
+
+    const allDays =
+      earliestCancelDate !== null
+        ? Math.max(1, Math.floor((today.getTime() - earliestCancelDate.getTime()) / dayMs) + 1)
+        : 7;
+    const periodDays = cancelTrendDays === "all" ? allDays : cancelTrendDays;
+
+    for (const row of recapRows) {
+      if (row.status !== "cancel") continue;
+      const nominal = Math.max(0, Number(row.nominalCancel) || 0);
+      const dateObj = new Date(`${row.tanggal}T00:00:00`);
+      if (Number.isNaN(dateObj.getTime())) continue;
+      const diffDay = Math.floor((today.getTime() - dateObj.getTime()) / dayMs);
+      if (diffDay >= 0 && diffDay < periodDays) {
+        thisWeekCount += 1;
+        thisWeekNominal += nominal;
+      } else if (diffDay >= periodDays && diffDay < periodDays * 2) {
+        prevWeekCount += 1;
+        prevWeekNominal += nominal;
+      }
+    }
+
+    const sorted = Array.from(cancelByDate.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    const recent = sorted.slice(-periodDays).map(([date, val]) => ({ date, ...val, label: date.slice(5) }));
+    const maxNominal = Math.max(1, ...recent.map((item) => item.nominal));
+    const countDeltaPct =
+      prevWeekCount > 0 ? ((thisWeekCount - prevWeekCount) / prevWeekCount) * 100 : thisWeekCount > 0 ? 100 : 0;
+    const nominalDeltaPct =
+      prevWeekNominal > 0
+        ? ((thisWeekNominal - prevWeekNominal) / prevWeekNominal) * 100
+        : thisWeekNominal > 0
+          ? 100
+          : 0;
+
+    return {
+      recent,
+      maxNominal,
+      periodDays,
+      isAllRange: cancelTrendDays === "all",
+      hasData: recent.length > 0,
+      thisWeekCount,
+      prevWeekCount,
+      thisWeekNominal,
+      prevWeekNominal,
+      countDeltaPct,
+      nominalDeltaPct
+    };
+  }, [recapRows, cancelTrendDays]);
+
+  const recapProductLeaderboard = useMemo(() => {
+    const productMap = new Map<
+      string,
+      {
+        nama: string;
+        qty: number;
+        omzet: number;
+        modal: number;
+        labaKotor: number;
+        cancelNominal: number;
+        transaksi: number;
+      }
+    >();
+
+    for (const row of filteredRecapRows) {
+      if (!row.orderItems.length) continue;
+      const totalOrderOmzet = row.orderItems.reduce(
+        (acc, item) => acc + Math.max(0, Number(item.hargaJual) || 0) * Math.max(0, Number(item.qty) || 0),
+        0
+      );
+      for (const item of row.orderItems) {
+        const key = item.nama.trim().toLowerCase();
+        if (!key) continue;
+        const qty = Math.max(0, Number(item.qty) || 0);
+        const omzet = Math.max(0, Number(item.hargaJual) || 0) * qty;
+        const modal = Math.max(0, Number(item.modal) || 0) * qty;
+        const labaKotor = omzet - modal;
+        const cancelNominal =
+          row.status === "cancel"
+            ? totalOrderOmzet > 0
+              ? (omzet / totalOrderOmzet) * row.nominalCancel
+              : row.nominalCancel / Math.max(1, row.orderItems.length)
+            : 0;
+        const prev = productMap.get(key) ?? {
+          nama: item.nama.trim(),
+          qty: 0,
+          omzet: 0,
+          modal: 0,
+          labaKotor: 0,
+          cancelNominal: 0,
+          transaksi: 0
+        };
+        productMap.set(key, {
+          nama: prev.nama,
+          qty: prev.qty + qty,
+          omzet: prev.omzet + omzet,
+          modal: prev.modal + modal,
+          labaKotor: prev.labaKotor + labaKotor,
+          cancelNominal: prev.cancelNominal + cancelNominal,
+          transaksi: prev.transaksi + 1
+        });
+      }
+    }
+
+    const items = Array.from(productMap.values()).map((item) => ({
+      ...item,
+      labaFinal: item.labaKotor - item.cancelNominal
+    }));
+
+    const topQty = [...items].sort((a, b) => b.qty - a.qty).slice(0, 8);
+    const topProfit = [...items].sort((a, b) => b.labaFinal - a.labaFinal).slice(0, 8);
+
+    return { hasData: items.length > 0, totalProduk: items.length, topQty, topProfit };
+  }, [filteredRecapRows]);
+
+  const recapBusyHourAnalysis = useMemo(() => {
+    const hourBuckets = new Map<number, { transaksi: number; sukses: number; cancel: number; omzet: number }>();
+
+    for (const row of filteredRecapRows) {
+      const source = row.createdAt ? new Date(row.createdAt) : new Date(`${row.tanggal}T00:00:00`);
+      if (Number.isNaN(source.getTime())) continue;
+      const hour = source.getHours();
+      const prev = hourBuckets.get(hour) ?? { transaksi: 0, sukses: 0, cancel: 0, omzet: 0 };
+      hourBuckets.set(hour, {
+        transaksi: prev.transaksi + 1,
+        sukses: prev.sukses + (row.status === "sukses" ? 1 : 0),
+        cancel: prev.cancel + (row.status === "cancel" ? 1 : 0),
+        omzet: prev.omzet + (row.status === "sukses" ? row.omzet : 0)
+      });
+    }
+
+    const hours = Array.from({ length: 24 }, (_, hour) => {
+      const base = hourBuckets.get(hour) ?? { transaksi: 0, sukses: 0, cancel: 0, omzet: 0 };
+      return { hour, ...base };
+    });
+    const activeHours = hours.filter((h) => h.transaksi > 0);
+    const topByTransaksi = [...activeHours].sort((a, b) => b.transaksi - a.transaksi)[0] ?? null;
+    const topByOmzet = [...activeHours].sort((a, b) => b.omzet - a.omzet)[0] ?? null;
+
+    return {
+      hasData: activeHours.length > 0,
+      activeHours,
+      topByTransaksi,
+      topByOmzet
+    };
+  }, [filteredRecapRows]);
+
+  const recapRepeatBuyerCohort = useMemo(() => {
+    const buyers = new Map<string, { buyer: string; transaksi: number; sukses: number; cancel: number; omzet: number; labaFinal: number }>();
+
+    for (const row of filteredRecapRows) {
+      const key = row.pelanggan.trim().toLowerCase();
+      if (!key) continue;
+      const prev = buyers.get(key) ?? { buyer: row.pelanggan.trim(), transaksi: 0, sukses: 0, cancel: 0, omzet: 0, labaFinal: 0 };
+      const labaSukses = row.status === "sukses" ? row.omzet - row.modal - row.ongkir : 0;
+      buyers.set(key, {
+        buyer: prev.buyer,
+        transaksi: prev.transaksi + 1,
+        sukses: prev.sukses + (row.status === "sukses" ? 1 : 0),
+        cancel: prev.cancel + (row.status === "cancel" ? 1 : 0),
+        omzet: prev.omzet + (row.status === "sukses" ? row.omzet : 0),
+        labaFinal: prev.labaFinal + labaSukses - row.nominalCancel
+      });
+    }
+
+    const entries = Array.from(buyers.values());
+    const repeatBuyers = entries.filter((b) => b.transaksi >= 2);
+    const oneTimeBuyers = entries.filter((b) => b.transaksi === 1);
+    const totalTransaksi = entries.reduce((acc, b) => acc + b.transaksi, 0);
+    const repeatTransaksi = repeatBuyers.reduce((acc, b) => acc + b.transaksi, 0);
+    const repeatOmzet = repeatBuyers.reduce((acc, b) => acc + b.omzet, 0);
+    const repeatShare = totalTransaksi > 0 ? (repeatTransaksi / totalTransaksi) * 100 : 0;
+
+    return {
+      totalBuyer: entries.length,
+      repeatBuyer: repeatBuyers.length,
+      oneTimeBuyer: oneTimeBuyers.length,
+      repeatTransaksi,
+      repeatShare,
+      repeatOmzet,
+      topRepeatBuyers: repeatBuyers.sort((a, b) => b.transaksi - a.transaksi).slice(0, 8)
+    };
+  }, [filteredRecapRows]);
+
+  const recapForecastWeekly = useMemo(() => {
+    const omzetByDate = new Map<string, number>();
+    const labaFinalByDate = new Map<string, number>();
+    for (const row of recapRows) {
+      const omzet = row.status === "sukses" ? row.omzet : 0;
+      const labaSukses = row.status === "sukses" ? row.omzet - row.modal - row.ongkir : 0;
+      const labaFinal = labaSukses - row.nominalCancel;
+      omzetByDate.set(row.tanggal, (omzetByDate.get(row.tanggal) ?? 0) + omzet);
+      labaFinalByDate.set(row.tanggal, (labaFinalByDate.get(row.tanggal) ?? 0) + labaFinal);
+    }
+
+    const dates = Array.from(omzetByDate.keys()).sort((a, b) => a.localeCompare(b));
+    const recentDates = dates.slice(-14);
+    const recentOmzet = recentDates.map((d) => omzetByDate.get(d) ?? 0);
+    const recentLabaFinal = recentDates.map((d) => labaFinalByDate.get(d) ?? 0);
+    const avgDailyOmzet =
+      recentOmzet.length > 0 ? recentOmzet.reduce((acc, val) => acc + val, 0) / recentOmzet.length : 0;
+    const avgDailyLabaFinal =
+      recentLabaFinal.length > 0 ? recentLabaFinal.reduce((acc, val) => acc + val, 0) / recentLabaFinal.length : 0;
+
+    const forecast7Omzet = avgDailyOmzet * 7;
+    const forecast7LabaFinal = avgDailyLabaFinal * 7;
+    const hasData = recentDates.length >= 3;
+
+    return {
+      hasData,
+      basisHari: recentDates.length,
+      avgDailyOmzet,
+      avgDailyLabaFinal,
+      forecast7Omzet,
+      forecast7LabaFinal,
+      latestDate: recentDates[recentDates.length - 1] ?? null
     };
   }, [recapRows]);
 
@@ -2420,8 +2990,9 @@ export default function Page() {
       badge: "Rekap",
       stats: [
         `Total transaksi: ${recapSummary.transaksi}`,
+        `Transaksi cancel: ${recapSummary.transaksiCancel}`,
         `Total omzet: ${rupiah(recapSummary.omzet)}`,
-        `Laba bersih: ${rupiah(recapSummary.laba)}`
+        `Laba final: ${rupiah(recapSummary.labaFinal)}`
       ]
     }
   };
@@ -2817,7 +3388,74 @@ export default function Page() {
               </div>
             )}
 
-            <div className="mt-3 grid gap-2 md:grid-cols-3">
+            <div className="mt-3 rounded-2xl border border-rose-200/70 bg-white/85 p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-rose-700">Cancel Trend</p>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {recapCancelTrend.isAllRange ? "Semua Riwayat" : `${recapCancelTrend.periodDays} Hari Terakhir`}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  {[7, 14, 30, "all"].map((day) => (
+                    <button
+                      key={`cancel-trend-day-${day}`}
+                      type="button"
+                      onClick={() => setCancelTrendDays(day as 7 | 14 | 30 | "all")}
+                      className={`rounded-xl border px-2.5 py-1 text-[11px] font-semibold transition ${
+                        recapCancelTrend.periodDays === day
+                          || (day === "all" && recapCancelTrend.isAllRange)
+                          ? "border-rose-300 bg-rose-100 text-rose-700"
+                          : "border-stone-200 bg-white text-slate-600 hover:bg-stone-50"
+                      }`}
+                    >
+                      {day === "all" ? "Semua" : `${day}H`}
+                    </button>
+                  ))}
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                      recapCancelTrend.nominalDeltaPct <= 0 ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+                    }`}
+                  >
+                    {recapCancelTrend.nominalDeltaPct > 0 ? "+" : ""}
+                    {recapCancelTrend.nominalDeltaPct.toFixed(1)}% nominal vs periode lalu
+                  </span>
+                </div>
+              </div>
+              {recapCancelTrend.hasData ? (
+                <div className="space-y-1.5">
+                  {recapCancelTrend.recent.map((item) => (
+                    <div key={`cancel-trend-${item.date}`} className="rounded-xl border border-stone-200 bg-stone-50/70 px-2.5 py-2">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <span className="font-semibold text-slate-700">{item.label}</span>
+                        <span className="text-rose-700">{item.count} cancel</span>
+                        <span className="font-medium text-slate-700">{rupiah(item.nominal)}</span>
+                      </div>
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-stone-200">
+                        <div
+                          className="h-full rounded-full bg-rose-400"
+                          style={{ width: `${Math.max(6, (item.nominal / recapCancelTrend.maxNominal) * 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-4 text-sm text-slate-500">
+                  Belum ada transaksi cancel pada periode data saat ini.
+                </p>
+              )}
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                  Periode ini ({recapCancelTrend.isAllRange ? "Semua" : `${recapCancelTrend.periodDays}H`}): <strong className="text-slate-900">{recapCancelTrend.thisWeekCount} cancel</strong> ({rupiah(recapCancelTrend.thisWeekNominal)})
+                </div>
+                <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                  Periode lalu ({recapCancelTrend.isAllRange ? "Semua" : `${recapCancelTrend.periodDays}H`}): <strong className="text-slate-900">{recapCancelTrend.prevWeekCount} cancel</strong> ({rupiah(recapCancelTrend.prevWeekNominal)})
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
               <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
                 Omzet Hari Terakhir
                 <p className="font-semibold text-slate-900">{rupiah(recapLineChart.latestValue)}</p>
@@ -2829,6 +3467,10 @@ export default function Page() {
               <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
                 Total Omzet
                 <p className="font-semibold text-slate-900">{rupiah(recapSummary.omzet)}</p>
+              </div>
+              <div className="rounded-2xl border border-white/80 bg-white/80 px-3 py-2 text-sm text-slate-700">
+                Biaya Cancel
+                <p className="font-semibold text-rose-700">{rupiah(recapSummary.totalBiayaCancel)}</p>
               </div>
             </div>
           </section>
@@ -3560,6 +4202,7 @@ export default function Page() {
                   setRecapFilterStartDate("");
                   setRecapFilterEndDate("");
                   setRecapFilterMarketplace("Semua");
+                  setRecapFilterStatus("Semua");
                   setRecapFilterQuery("");
                 }}
                 className="rounded-xl border border-stone-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
@@ -3567,7 +4210,7 @@ export default function Page() {
                 Reset Filter
               </button>
             </div>
-            <div className="grid gap-2 md:grid-cols-4">
+            <div className="grid gap-2 md:grid-cols-5">
               <label className="grid gap-1 text-xs text-slate-600">
                 <span>Dari Tanggal</span>
                 <input type="date" value={recapFilterStartDate} onChange={(e) => setRecapFilterStartDate(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
@@ -3586,16 +4229,28 @@ export default function Page() {
                 </select>
               </label>
               <label className="grid gap-1 text-xs text-slate-600">
+                <span>Status</span>
+                <select value={recapFilterStatus} onChange={(e) => setRecapFilterStatus(e.target.value as "Semua" | SalesRecapRow["status"])} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                  <option value="Semua">Semua Status</option>
+                  <option value="sukses">Sukses</option>
+                  <option value="cancel">Cancel</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-slate-600">
                 <span>Cari Data</span>
-                <input value={recapFilterQuery} onChange={(e) => setRecapFilterQuery(e.target.value)} placeholder="No pesanan / pelanggan / catatan" className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                <input value={recapFilterQuery} onChange={(e) => setRecapFilterQuery(e.target.value)} placeholder="No pesanan / pelanggan / catatan / alasan / nominal cancel" className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
               </label>
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2 md:grid-cols-5">
+          <div className="mt-4 grid gap-2 md:grid-cols-7">
             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
               <p className="text-xs text-slate-500">Total Transaksi</p>
               <p className="font-semibold text-slate-900">{recapSummary.transaksi}</p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Transaksi Cancel</p>
+              <p className="font-semibold text-rose-700">{recapSummary.transaksiCancel}</p>
             </div>
             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
               <p className="text-xs text-slate-500">Total Omzet</p>
@@ -3610,9 +4265,23 @@ export default function Page() {
               <p className="font-semibold text-slate-900">{rupiah(recapSummary.ongkir)}</p>
             </div>
             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
-              <p className="text-xs text-slate-500">Laba Bersih</p>
+              <p className="text-xs text-slate-500">Laba Bersih (Sukses)</p>
               <p className={recapSummary.laba >= 0 ? "font-semibold text-slate-900" : "font-semibold text-rose-600"}>
                 {rupiah(recapSummary.laba)}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Biaya Cancel</p>
+              <p className="font-semibold text-rose-700">{rupiah(recapSummary.totalBiayaCancel)}</p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Cancel Rate</p>
+              <p className="font-semibold text-rose-700">{recapSummary.cancelRate.toFixed(1)}%</p>
+            </div>
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
+              <p className="text-xs text-slate-500">Laba Final</p>
+              <p className={recapSummary.labaFinal >= 0 ? "font-semibold text-slate-900" : "font-semibold text-rose-600"}>
+                {rupiah(recapSummary.labaFinal)}
               </p>
             </div>
           </div>
@@ -3637,18 +4306,300 @@ export default function Page() {
               <div key={name} className="rounded-2xl border border-stone-200 bg-white px-3 py-2">
                 <p className="text-xs font-semibold text-slate-700">{name}</p>
                 <p className="text-xs text-slate-500">{recapByMarketplace[name].transaksi} transaksi</p>
+                <p className="text-xs text-rose-600">{recapByMarketplace[name].cancel} cancel</p>
                 <p className="mt-1 text-sm text-slate-600">Omzet: <strong className="text-slate-900">{rupiah(recapByMarketplace[name].omzet)}</strong></p>
                 <p className="text-sm text-slate-600">Laba: <strong className={recapByMarketplace[name].laba >= 0 ? "text-slate-900" : "text-rose-600"}>{rupiah(recapByMarketplace[name].laba)}</strong></p>
+                <p className="text-sm text-rose-700">Biaya Cancel: <strong>{rupiah(recapByMarketplace[name].biayaCancel)}</strong></p>
               </div>
             ))}
           </div>
 
-          <div className="mt-3 overflow-x-auto rounded-2xl border border-stone-200">
-            <table className="min-w-[1080px] text-sm">
+          <div className="mt-3 grid gap-2 xl:grid-cols-2">
+            <div className="rounded-2xl border border-stone-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Leaderboard Produk</p>
+              {recapProductLeaderboard.hasData ? (
+                <div className="mt-2 grid gap-2 lg:grid-cols-2">
+                  <div>
+                    <p className="text-xs font-medium text-slate-600">Top Produk (Qty)</p>
+                    <div className="mt-1 space-y-1">
+                      {recapProductLeaderboard.topQty.map((item, index) => (
+                        <div key={`lb-qty-${item.nama}-${index}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs">
+                          <p className="font-semibold text-slate-800">{index + 1}. {item.nama}</p>
+                          <p className="text-slate-600">Qty {item.qty} · Omzet {rupiah(item.omzet)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-slate-600">Top Produk (Laba Final)</p>
+                    <div className="mt-1 space-y-1">
+                      {recapProductLeaderboard.topProfit.map((item, index) => (
+                        <div key={`lb-profit-${item.nama}-${index}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs">
+                          <p className="font-semibold text-slate-800">{index + 1}. {item.nama}</p>
+                          <p className={item.labaFinal >= 0 ? "text-slate-600" : "text-rose-700"}>
+                            Laba Final {rupiah(item.labaFinal)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Belum ada data produk. Simpan transaksi dengan item barang agar leaderboard terisi.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-stone-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Jam Ramai Transaksi</p>
+              {recapBusyHourAnalysis.hasData ? (
+                <div className="mt-2 space-y-2">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                      Jam terpadat:{" "}
+                      <strong className="text-slate-900">
+                        {String(recapBusyHourAnalysis.topByTransaksi?.hour ?? 0).padStart(2, "0")}:00
+                      </strong>{" "}
+                      ({recapBusyHourAnalysis.topByTransaksi?.transaksi ?? 0} transaksi)
+                    </div>
+                    <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                      Jam omzet tertinggi:{" "}
+                      <strong className="text-slate-900">
+                        {String(recapBusyHourAnalysis.topByOmzet?.hour ?? 0).padStart(2, "0")}:00
+                      </strong>{" "}
+                      ({rupiah(recapBusyHourAnalysis.topByOmzet?.omzet ?? 0)})
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5">
+                    {recapBusyHourAnalysis.activeHours
+                      .sort((a, b) => b.transaksi - a.transaksi)
+                      .slice(0, 8)
+                      .map((hour) => (
+                        <div key={`hour-${hour.hour}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                          <strong className="text-slate-900">{String(hour.hour).padStart(2, "0")}:00</strong> · {hour.transaksi} transaksi · {hour.cancel} cancel · Omzet {rupiah(hour.omzet)}
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Belum ada data waktu transaksi untuk dianalisa.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 xl:grid-cols-2">
+            <div className="rounded-2xl border border-stone-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Cohort Repeat Buyer</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                  Total buyer unik <strong className="text-slate-900">{recapRepeatBuyerCohort.totalBuyer}</strong>
+                </div>
+                <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                  Repeat buyer <strong className="text-slate-900">{recapRepeatBuyerCohort.repeatBuyer}</strong>
+                </div>
+                <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                  One-time buyer <strong className="text-slate-900">{recapRepeatBuyerCohort.oneTimeBuyer}</strong>
+                </div>
+                <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                  Share repeat transaksi <strong className="text-slate-900">{recapRepeatBuyerCohort.repeatShare.toFixed(1)}%</strong>
+                </div>
+              </div>
+              {recapRepeatBuyerCohort.topRepeatBuyers.length ? (
+                <div className="mt-2 space-y-1.5">
+                  {recapRepeatBuyerCohort.topRepeatBuyers.map((buyer, index) => (
+                    <div key={`repeat-${buyer.buyer}-${index}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                      <strong className="text-slate-900">{index + 1}. {buyer.buyer}</strong> · {buyer.transaksi} trx · Omzet {rupiah(buyer.omzet)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Belum ada repeat buyer pada filter aktif.</p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-stone-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Forecast 7 Hari</p>
+              {recapForecastWeekly.hasData ? (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                    Basis data <strong className="text-slate-900">{recapForecastWeekly.basisHari} hari</strong>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                    Rata-rata omzet harian <strong className="text-slate-900">{rupiah(recapForecastWeekly.avgDailyOmzet)}</strong>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                    Prediksi omzet 7 hari <strong className="text-slate-900">{rupiah(recapForecastWeekly.forecast7Omzet)}</strong>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
+                    Prediksi laba final 7 hari <strong className={recapForecastWeekly.forecast7LabaFinal >= 0 ? "text-slate-900" : "text-rose-700"}>{rupiah(recapForecastWeekly.forecast7LabaFinal)}</strong>
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">Butuh minimal 3 hari data untuk membuat forecast mingguan.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
+            {filteredRecapRows.length ? (
+              filteredRecapRows.map((row) => {
+                const laba = row.omzet - row.modal - row.ongkir;
+                const labaFinalTransaksi = laba - row.nominalCancel;
+                const detailOpen = openBiayaDetailRow?.id === row.id;
+                return (
+                  <div key={`recap-card-${row.id}`} className={row.status === "cancel" ? "rounded-2xl border border-rose-200 bg-rose-50/40 p-3" : "rounded-2xl border border-stone-200 bg-white p-3"}>
+                    <div className="grid gap-1.5 text-sm sm:grid-cols-2">
+                      <p className="text-slate-600">Tanggal: <strong className="text-slate-900">{row.tanggal}</strong></p>
+                      <p className="text-slate-600">Marketplace: <strong className="text-slate-900">{row.marketplace}</strong></p>
+                      <p className="text-slate-600">
+                        Status:{" "}
+                        <strong className={row.status === "cancel" ? "text-rose-700" : "text-emerald-700"}>
+                          {row.status === "cancel" ? "Cancel" : "Sukses"}
+                        </strong>
+                      </p>
+                      <p className="break-all text-slate-600">No Pesanan: <strong className="text-slate-900">{row.noPesanan || "-"}</strong></p>
+                      <p className="break-all text-slate-600">Pelanggan: <strong className="text-slate-900">{row.pelanggan || "-"}</strong></p>
+                    </div>
+                    <div className="mt-2 rounded-xl border border-stone-200 bg-white/90 p-2.5">
+                      <div className="grid gap-1 text-sm sm:grid-cols-2">
+                        <p className="text-slate-600">Omzet: <strong className="text-slate-900">{rupiah(row.omzet)}</strong></p>
+                        <p className="text-slate-600">Modal: <strong className="text-slate-900">{rupiah(row.modal)}</strong></p>
+                        <p className="text-slate-600">Biaya: <strong className="text-slate-900">{rupiah(row.ongkir)}</strong></p>
+                        <p className="text-slate-600">Biaya Cancel: <strong className={row.nominalCancel > 0 ? "text-rose-700" : "text-slate-900"}>{rupiah(row.nominalCancel)}</strong></p>
+                        <p className="text-slate-600">Laba (Sukses): <strong className={laba >= 0 ? "text-slate-900" : "text-rose-600"}>{rupiah(laba)}</strong></p>
+                        <p className="text-slate-600">Laba Final: <strong className={labaFinalTransaksi >= 0 ? "text-slate-900" : "text-rose-600"}>{rupiah(labaFinalTransaksi)}</strong></p>
+                      </div>
+                    </div>
+                    <p className="mt-1 break-words text-sm text-slate-600">Catatan: <strong className="text-slate-900">{row.catatan || "-"}</strong></p>
+                    {row.status === "cancel" ? (
+                      <div className="mt-1 space-y-0.5">
+                        <p className="break-words text-sm text-rose-700">
+                          Alasan Cancel: <strong>{row.alasanCancel || "-"}</strong>
+                        </p>
+                      </div>
+                    ) : null}
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {canManageRecap ? (
+                        <button type="button" onClick={() => openEditRecap(row)} className="whitespace-nowrap rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
+                          Edit
+                        </button>
+                      ) : null}
+                      {canManageRecap ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleRecapCancelStatus(row)}
+                          disabled={cancelStatusSaving}
+                          className={row.status === "cancel"
+                            ? "whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
+                            : "whitespace-nowrap rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-100"
+                          }
+                        >
+                          {row.status === "cancel"
+                            ? "Batalkan Cancel"
+                            : isCancelDraftOpenForRow(row.id)
+                              ? "Tutup Cancel"
+                              : "Tandai Cancel"}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenBiayaDetailRow((current) =>
+                            current?.id === row.id ? null : row
+                          )
+                        }
+                        className="whitespace-nowrap rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                      >
+                        {detailOpen ? "Tutup Detail" : "Detail Biaya"}
+                      </button>
+                      {canDeleteRecap ? (
+                        <button type="button" onClick={() => deleteRecapRow(row.id)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                          Hapus
+                        </button>
+                      ) : null}
+                    </div>
+                    {isCancelDraftVisibleForRow(row.id) && row.status !== "cancel" ? (
+                      <div className={`mt-2 rounded-2xl border border-rose-200 bg-rose-50/60 p-3 ${getCancelDraftPanelClass(row.id)}`}>
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-rose-700">Input Cancel</p>
+                        <label className="mt-2 grid gap-1 text-xs text-slate-600">
+                          <span>Alasan Cancel (opsional)</span>
+                          <textarea
+                            value={cancelDraftReason}
+                            onChange={(e) => setCancelDraftReason(e.target.value)}
+                            rows={2}
+                            placeholder="Contoh: customer tidak respon, stok kosong."
+                            className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                          />
+                        </label>
+                        <label className="mt-2 grid gap-1 text-xs text-slate-600">
+                          <span>Nominal Biaya Cancel (Rp)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={cancelDraftNominal}
+                            onChange={(e) => setCancelDraftNominal(Math.max(0, Number(e.target.value || 0)))}
+                            className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                          />
+                        </label>
+                        <div className="mt-2 flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => closeCancelDraft()}
+                            disabled={cancelStatusSaving}
+                            className="rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            Batal
+                          </button>
+                          <button
+                            type="button"
+                            onClick={confirmRecapCancel}
+                            disabled={cancelStatusSaving}
+                            className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                        {cancelStatusSaving ? "Menyimpan..." : "Simpan Cancel"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {detailOpen ? (
+                      <div className="mt-2 animate-sweep-in rounded-2xl border border-stone-200 bg-stone-50/70 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Detail Biaya</p>
+                        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                          {row.biayaDetail.length ? (
+                            row.biayaDetail.map((detail, index) => (
+                              <div key={`${detail.label}-${index}`} className="flex items-center justify-between rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm">
+                                <span className="text-slate-700">{detail.label}</span>
+                                <strong className="text-slate-900">{rupiah(detail.value)}</strong>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-slate-500">Belum ada detail biaya.</p>
+                          )}
+                        </div>
+                        <div className="mt-2 border-t border-stone-200 pt-2 text-sm">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-slate-700">Total Biaya</span>
+                            <strong className="text-slate-900">{rupiah(row.ongkir)}</strong>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            ) : (
+              <p className="rounded-2xl border border-stone-200 bg-white px-3 py-4 text-center text-slate-500">
+                Belum ada data rekap.
+              </p>
+            )}
+          </div>
+
+          <div className="hidden mt-3 overflow-x-auto rounded-2xl border border-stone-200">
+            <table className="w-full text-sm">
               <thead className="bg-stone-50 text-slate-700">
                 <tr>
                   <th className="px-3 py-2 text-left">Tanggal</th>
                   <th className="px-3 py-2 text-left">Marketplace</th>
+                  <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-left">No Pesanan</th>
                   <th className="px-3 py-2 text-left">Pelanggan</th>
                   <th className="px-3 py-2 text-right">Omzet</th>
@@ -3664,39 +4615,163 @@ export default function Page() {
                   filteredRecapRows.map((row) => {
                     const laba = row.omzet - row.modal - row.ongkir;
                     return (
-                      <tr key={row.id} className="border-t border-stone-100">
-                        <td className="px-3 py-2">{row.tanggal}</td>
-                        <td className="px-3 py-2">{row.marketplace}</td>
-                        <td className="px-3 py-2">{row.noPesanan || "-"}</td>
-                        <td className="px-3 py-2">{row.pelanggan || "-"}</td>
-                        <td className="px-3 py-2 text-right">{rupiah(row.omzet)}</td>
-                        <td className="px-3 py-2 text-right">{rupiah(row.modal)}</td>
-                        <td className="px-3 py-2 text-right">{rupiah(row.ongkir)}</td>
-                        <td className={laba >= 0 ? "px-3 py-2 text-right text-slate-900" : "px-3 py-2 text-right text-rose-600"}>{rupiah(laba)}</td>
-                        <td className="px-3 py-2">{row.catatan || "-"}</td>
-                        <td className="min-w-[220px] px-3 py-2 text-center">
-                          <div className="flex flex-wrap items-center justify-center gap-1.5">
-                            {canManageRecap ? (
-                              <button type="button" onClick={() => openEditRecap(row)} className="whitespace-nowrap rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
-                                Edit
-                              </button>
+                      <Fragment key={row.id}>
+                        <tr className={row.status === "cancel" ? "border-t border-stone-100 bg-rose-50/40" : "border-t border-stone-100"}>
+                          <td className="px-3 py-2">{row.tanggal}</td>
+                          <td className="px-3 py-2">{row.marketplace}</td>
+                          <td className="px-3 py-2">
+                            <span className={row.status === "cancel" ? "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700" : "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700"}>
+                              {row.status === "cancel" ? "Cancel" : "Sukses"}
+                            </span>
+                          </td>
+                          <td className="break-all px-3 py-2">{row.noPesanan || "-"}</td>
+                          <td className="break-all px-3 py-2">{row.pelanggan || "-"}</td>
+                          <td className="px-3 py-2 text-right">{rupiah(row.omzet)}</td>
+                          <td className="px-3 py-2 text-right">{rupiah(row.modal)}</td>
+                          <td className="px-3 py-2 text-right">{rupiah(row.ongkir)}</td>
+                          <td className={laba >= 0 ? "px-3 py-2 text-right text-slate-900" : "px-3 py-2 text-right text-rose-600"}>{rupiah(laba)}</td>
+                          <td className="break-words px-3 py-2">
+                            {row.catatan || "-"}
+                            {row.status === "cancel" ? (
+                              <div className="mt-1 space-y-0.5 text-xs text-rose-700">
+                                <p>Alasan: {row.alasanCancel || "-"}</p>
+                                <p>Biaya Cancel: {rupiah(row.nominalCancel)}</p>
+                              </div>
                             ) : null}
-                            <button type="button" onClick={() => setOpenBiayaDetailRow(row)} className="whitespace-nowrap rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
-                              Detail Biaya
-                            </button>
-                            {canDeleteRecap ? (
-                              <button type="button" onClick={() => deleteRecapRow(row.id)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
-                                Hapus
+                          </td>
+                          <td className="min-w-[220px] px-3 py-2 text-center">
+                            <div className="flex flex-wrap items-center justify-center gap-1.5">
+                              {canManageRecap ? (
+                                <button type="button" onClick={() => openEditRecap(row)} className="whitespace-nowrap rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
+                                  Edit
+                                </button>
+                              ) : null}
+                              {canManageRecap ? (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleRecapCancelStatus(row)}
+                                  disabled={cancelStatusSaving}
+                                  className={row.status === "cancel"
+                                    ? "whitespace-nowrap rounded-xl border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
+                                    : "whitespace-nowrap rounded-xl border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-100"
+                                  }
+                                >
+                                  {row.status === "cancel"
+                                    ? "Batalkan Cancel"
+                                    : isCancelDraftOpenForRow(row.id)
+                                      ? "Tutup Cancel"
+                                      : "Tandai Cancel"}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOpenBiayaDetailRow((current) =>
+                                    current?.id === row.id ? null : row
+                                  )
+                                }
+                                className="whitespace-nowrap rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                              >
+                                {openBiayaDetailRow?.id === row.id ? "Tutup Detail" : "Detail Biaya"}
                               </button>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
+                              {canDeleteRecap ? (
+                                <button type="button" onClick={() => deleteRecapRow(row.id)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                                  Hapus
+                                </button>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                        {isCancelDraftVisibleForRow(row.id) && row.status !== "cancel" ? (
+                          <tr className="border-t border-stone-100 bg-rose-50/40">
+                            <td className="px-3 py-3" colSpan={11}>
+                              <div className={`rounded-2xl border border-rose-200 bg-white p-3 ${getCancelDraftPanelClass(row.id)}`}>
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-rose-700">Input Cancel</p>
+                                <div className="mt-2 grid gap-2 lg:grid-cols-[1fr_220px_auto]">
+                                  <textarea
+                                    value={cancelDraftReason}
+                                    onChange={(e) => setCancelDraftReason(e.target.value)}
+                                    rows={2}
+                                    placeholder="Alasan cancel (opsional)"
+                                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                  />
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={cancelDraftNominal}
+                                    onChange={(e) => setCancelDraftNominal(Math.max(0, Number(e.target.value || 0)))}
+                                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                  />
+                                  <div className="flex items-center justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => closeCancelDraft()}
+                                      disabled={cancelStatusSaving}
+                                      className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                    >
+                                      Batal
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={confirmRecapCancel}
+                                      disabled={cancelStatusSaving}
+                                      className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                    >
+                                      {cancelStatusSaving ? "Menyimpan..." : "Simpan Cancel"}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                        {openBiayaDetailRow?.id === row.id ? (
+                          <tr className="border-t border-stone-100 bg-stone-50/60">
+                            <td className="px-3 py-3" colSpan={11}>
+                              <div className="animate-sweep-in rounded-2xl border border-stone-200 bg-white p-3">
+                                <div className="mb-2 flex items-start justify-between gap-2 border-b border-stone-200 pb-2">
+                                  <div>
+                                    <p className="text-sm font-semibold text-slate-900">Detail Biaya</p>
+                                    <p className="text-xs text-slate-500">
+                                      {row.marketplace} · {row.noPesanan || "-"}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => setOpenBiayaDetailRow(null)}
+                                    className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                                  >
+                                    Tutup
+                                  </button>
+                                </div>
+                                <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                                  {row.biayaDetail.length ? (
+                                    row.biayaDetail.map((detail, index) => (
+                                      <div key={`${detail.label}-${index}`} className="flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                                        <span className="text-slate-700">{detail.label}</span>
+                                        <strong className="text-slate-900">{rupiah(detail.value)}</strong>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <p className="text-sm text-slate-500">Belum ada detail biaya.</p>
+                                  )}
+                                </div>
+                                <div className="mt-2 border-t border-stone-200 pt-2 text-sm">
+                                  <div className="flex items-center justify-between">
+                                    <span className="font-medium text-slate-700">Total Biaya</span>
+                                    <strong className="text-slate-900">{rupiah(row.ongkir)}</strong>
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
                     );
                   })
                 ) : (
                   <tr>
-                    <td className="px-3 py-4 text-center text-slate-500" colSpan={10}>
+                    <td className="px-3 py-4 text-center text-slate-500" colSpan={11}>
                       Belum ada data rekap.
                     </td>
                   </tr>
@@ -3704,46 +4779,6 @@ export default function Page() {
               </tbody>
             </table>
           </div>
-
-          {openBiayaDetailRow ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
-              <div className="w-full max-w-md rounded-2xl border border-stone-200 bg-white p-4 shadow-xl">
-                <div className="mb-3 flex items-start justify-between gap-2 border-b border-stone-200 pb-2">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">Detail Biaya</p>
-                    <p className="text-xs text-slate-500">
-                      {openBiayaDetailRow.marketplace} · {openBiayaDetailRow.noPesanan || "-"}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setOpenBiayaDetailRow(null)}
-                    className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
-                  >
-                    Tutup
-                  </button>
-                </div>
-                <div className="space-y-1.5">
-                  {openBiayaDetailRow.biayaDetail.length ? (
-                    openBiayaDetailRow.biayaDetail.map((detail, index) => (
-                      <div key={`${detail.label}-${index}`} className="flex items-center justify-between rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
-                        <span className="text-slate-700">{detail.label}</span>
-                        <strong className="text-slate-900">{rupiah(detail.value)}</strong>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-slate-500">Belum ada detail biaya.</p>
-                  )}
-                </div>
-                <div className="mt-3 border-t border-stone-200 pt-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-slate-700">Total Biaya</span>
-                    <strong className="text-slate-900">{rupiah(openBiayaDetailRow.ongkir)}</strong>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
 
           {editRecapDraft ? (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">

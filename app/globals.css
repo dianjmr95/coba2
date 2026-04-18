@@ -58,6 +58,17 @@ body {
   }
 }
 
+@keyframes cancel-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .card-shell {
   @apply rounded-3xl border border-white/70 bg-white/85 shadow-[0_8px_24px_rgba(15,23,42,0.06)] backdrop-blur-md;
 }
@@ -76,6 +87,30 @@ body {
 
 .animate-pulse-soft {
   animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+.animate-cancel-reveal {
+  animation: cancel-reveal 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.cancel-inline-panel {
+  overflow: hidden;
+  transform-origin: top;
+  will-change: max-height, opacity, transform;
+}
+
+.cancel-inline-panel-open {
+  max-height: 520px;
+  opacity: 1;
+  transform: translateY(0);
+  transition: max-height 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s ease-out, transform 0.22s ease-out;
+}
+
+.cancel-inline-panel-close {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: max-height 0.22s ease-in, opacity 0.16s ease-in, transform 0.16s ease-in;
 }
 
 input[type="number"]::-webkit-outer-spin-button,
