@@ -61,8 +61,9 @@ type InvoiceItem = {
 type RecapOrderItem = {
   id: string;
   nama: string;
-  omzet: number;
+  hargaJual: number;
   modal: number;
+  qty: number;
 };
 
 type RecapBiayaItem = {
@@ -584,7 +585,7 @@ export default function Page() {
   const [recapOmzet, setRecapOmzet] = useState(0);
   const [recapModal, setRecapModal] = useState(0);
   const [recapOrderItems, setRecapOrderItems] = useState<RecapOrderItem[]>([
-    { id: `${Date.now()}`, nama: "", omzet: 0, modal: 0 }
+    { id: `${Date.now()}`, nama: "", hargaJual: 0, modal: 0, qty: 1 }
   ]);
   const [recapOngkir, setRecapOngkir] = useState(0);
   const [recapMarketplaceBiayaKomisiPlatform, setRecapMarketplaceBiayaKomisiPlatform] = useState(0);
@@ -699,8 +700,11 @@ export default function Page() {
   const recapOrderTotals = useMemo(() => {
     return recapOrderItems.reduce(
       (acc, item) => {
-        acc.omzet += Math.max(0, item.omzet);
-        acc.modal += Math.max(0, item.modal);
+        const qty = Math.max(0, Number(item.qty) || 0);
+        const hargaJual = Math.max(0, Number(item.hargaJual) || 0);
+        const modal = Math.max(0, Number(item.modal) || 0);
+        acc.omzet += qty * hargaJual;
+        acc.modal += qty * modal;
         return acc;
       },
       { omzet: 0, modal: 0 }
@@ -1062,10 +1066,13 @@ export default function Page() {
   }
 
   function addRecapOrderItem() {
-    setRecapOrderItems((prev) => [...prev, { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, nama: "", omzet: 0, modal: 0 }]);
+    setRecapOrderItems((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random().toString(16).slice(2)}`, nama: "", hargaJual: 0, modal: 0, qty: 1 }
+    ]);
   }
 
-  function updateRecapOrderItem(id: string, field: "nama" | "omzet" | "modal", value: string | number) {
+  function updateRecapOrderItem(id: string, field: "nama" | "hargaJual" | "modal" | "qty", value: string | number) {
     setRecapOrderItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
@@ -1151,7 +1158,7 @@ export default function Page() {
     setRecapPelanggan("");
     setRecapOmzet(0);
     setRecapModal(0);
-    setRecapOrderItems([{ id: `${Date.now()}`, nama: "", omzet: 0, modal: 0 }]);
+    setRecapOrderItems([{ id: `${Date.now()}`, nama: "", hargaJual: 0, modal: 0, qty: 1 }]);
     setRecapOngkir(0);
     setRecapMarketplaceBiayaKomisiPlatform(0);
     setRecapMarketplaceBiayaLayananMall(0);
@@ -2520,9 +2527,19 @@ export default function Page() {
                   Tambah Barang
                 </button>
               </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50/80 px-3 py-2 text-xs text-slate-600">
+                Isi per item: <strong>Nama Barang</strong>, <strong>Harga Jual (satuan)</strong>, <strong>Modal (satuan)</strong>, dan <strong>Jumlah Barang (Qty)</strong>.
+                Total omzet dan modal akan dihitung otomatis dari `qty x harga`.
+              </div>
               <div className="grid gap-2">
-                {recapOrderItems.map((item) => (
-                  <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 md:grid-cols-[1.4fr_130px_130px_auto]">
+                {recapOrderItems.map((item) => {
+                  const itemQty = Math.max(0, Number(item.qty) || 0);
+                  const itemHargaJual = Math.max(0, Number(item.hargaJual) || 0);
+                  const itemModal = Math.max(0, Number(item.modal) || 0);
+                  const lineOmzet = itemQty * itemHargaJual;
+                  const lineModal = itemQty * itemModal;
+                  return (
+                  <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 md:grid-cols-[1.4fr_130px_130px_90px_140px_140px_auto]">
                     <input
                       placeholder="Nama barang"
                       value={item.nama}
@@ -2532,9 +2549,9 @@ export default function Page() {
                     <input
                       type="number"
                       min={0}
-                      placeholder="Omzet"
-                      value={item.omzet}
-                      onChange={(e) => updateRecapOrderItem(item.id, "omzet", Number(e.target.value || 0))}
+                      placeholder="Harga jual"
+                      value={item.hargaJual}
+                      onChange={(e) => updateRecapOrderItem(item.id, "hargaJual", Number(e.target.value || 0))}
                       className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
                     />
                     <input
@@ -2545,6 +2562,20 @@ export default function Page() {
                       onChange={(e) => updateRecapOrderItem(item.id, "modal", Number(e.target.value || 0))}
                       className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
                     />
+                    <input
+                      type="number"
+                      min={0}
+                      placeholder="Qty"
+                      value={item.qty}
+                      onChange={(e) => updateRecapOrderItem(item.id, "qty", Number(e.target.value || 0))}
+                      className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                    <div className="flex items-center justify-end rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-sm font-medium text-slate-700">
+                      Omzet: {rupiah(lineOmzet)}
+                    </div>
+                    <div className="flex items-center justify-end rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-sm font-medium text-slate-700">
+                      Modal: {rupiah(lineModal)}
+                    </div>
                     <button
                       type="button"
                       onClick={() => removeRecapOrderItem(item.id)}
@@ -2554,7 +2585,8 @@ export default function Page() {
                       Hapus
                     </button>
                   </div>
-                ))}
+                );
+                })}
               </div>
               <div className="grid gap-2 md:grid-cols-2">
                 <label className="grid gap-1.5 text-sm text-slate-600">
