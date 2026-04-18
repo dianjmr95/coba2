@@ -239,6 +239,10 @@ function isMissingColumnError(error: unknown, columnName: string) {
   );
 }
 
+function isAnyMissingColumnError(error: unknown, columnNames: string[]) {
+  return columnNames.some((column) => isMissingColumnError(error, column));
+}
+
 function formatSupabaseError(action: string, error: unknown) {
   const { code, message } = getSupabaseErrorInfo(error);
   const codeUpper = code.toUpperCase();
@@ -330,7 +334,14 @@ function normalizeRecapRow(value: unknown): SalesRecapRow | null {
     : [];
 
   return {
-    id: typeof it.id === "string" ? it.id : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    id:
+      typeof it.id === "string"
+        ? it.id
+        : typeof it.id === "number" && Number.isFinite(it.id)
+          ? String(it.id)
+          : typeof it.id === "bigint"
+            ? String(it.id)
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     tanggal: typeof it.tanggal === "string" ? it.tanggal : new Date().toISOString().slice(0, 10),
     marketplace: marketplaceValue as SalesRecapRow["marketplace"],
     status: it.status === "cancel" ? "cancel" : "sukses",
@@ -1661,15 +1672,26 @@ export default function Page() {
     setHealthCheckResult(null);
 
     try {
-      const [sessionResult, salesResult, rolesResult] = await Promise.all([
+      const [sessionResult, salesResult, salesCancelColumnsResult, rolesResult] = await Promise.all([
         supabase.auth.getSession(),
         supabase.from(RECAP_SUPABASE_TABLE).select("id", { count: "exact", head: true }),
+        supabase
+          .from(RECAP_SUPABASE_TABLE)
+          .select("status, alasan_cancel, nominal_cancel, tanggal_cancel", { count: "exact", head: true }),
         supabase.from(USER_ROLE_TABLE).select("email", { count: "exact", head: true })
       ]);
 
       const authOk = Boolean(sessionResult.data.session?.user);
-      const salesOk = !salesResult.error;
+      const salesBasicOk = !salesResult.error;
+      const salesCancelColumnsOk = !salesCancelColumnsResult.error;
+      const salesOk = salesBasicOk && salesCancelColumnsOk;
       const rolesOk = !rolesResult.error;
+      const salesBaseMessage = salesBasicOk
+        ? `Akses tabel ${RECAP_SUPABASE_TABLE} OK.`
+        : formatSupabaseError(`Akses tabel ${RECAP_SUPABASE_TABLE}`, salesResult.error);
+      const salesCancelColumnsMessage = salesCancelColumnsOk
+        ? "Kolom cancel terdeteksi (status, alasan_cancel, nominal_cancel, tanggal_cancel)."
+        : formatSupabaseError("Cek kolom cancel di tabel rekap", salesCancelColumnsResult.error);
       const result: HealthCheckResult = {
         auth: {
           ok: authOk,
@@ -1679,9 +1701,7 @@ export default function Page() {
         },
         salesRecap: {
           ok: salesOk,
-          message: salesOk
-            ? `Akses tabel ${RECAP_SUPABASE_TABLE} OK.`
-            : formatSupabaseError(`Akses tabel ${RECAP_SUPABASE_TABLE}`, salesResult.error)
+          message: `${salesBaseMessage} ${salesCancelColumnsMessage}`
         },
         userRoles: {
           ok: rolesOk,
@@ -2024,30 +2044,48 @@ export default function Page() {
       tanggalCancel: nextStatus === "cancel" ? new Date().toISOString() : null
     };
 
+    const cancelPayload = {
+      status: updatedRow.status,
+      alasan_cancel: updatedRow.alasanCancel,
+      nominal_cancel: updatedRow.nominalCancel,
+      tanggal_cancel: updatedRow.tanggalCancel
+    };
+
     setCancelStatusSaving(true);
     let updateResult = await runSupabaseWithRetry(
       () =>
         supabase
           .from(RECAP_SUPABASE_TABLE)
-          .update(toRecapDbPayload(updatedRow, supportsOrderItemsColumn))
+          .update(cancelPayload, { count: "exact" })
           .eq("id", row.id),
       2
     );
 
-    if (updateResult.error && supportsOrderItemsColumn && isMissingColumnError(updateResult.error, "order_items")) {
-      setSupportsOrderItemsColumn(false);
-      updateResult = await runSupabaseWithRetry(
-        () =>
-          supabase
-            .from(RECAP_SUPABASE_TABLE)
-            .update(toRecapDbPayload(updatedRow, false))
-            .eq("id", row.id),
-        2
-      );
+    if (updateResult.error) {
+      if (
+        isAnyMissingColumnError(updateResult.error, [
+          "status",
+          "alasan_cancel",
+          "nominal_cancel",
+          "tanggal_cancel"
+        ])
+      ) {
+        setRecapNotice(
+          "Update status cancel gagal karena kolom cancel belum ada di tabel Supabase. Jalankan migration `20260418_recap_cancel_status.sql` dan `20260418_recap_cancel_nominal.sql`."
+        );
+      } else {
+        setRecapNotice(formatSupabaseError("Mengubah status cancel transaksi", updateResult.error));
+      }
+      setCancelStatusSaving(false);
+      return false;
     }
 
-    if (updateResult.error) {
-      setRecapNotice(formatSupabaseError("Mengubah status cancel transaksi", updateResult.error));
+    const rawAffectedRows = (updateResult as { count?: unknown }).count;
+    const affectedRows = typeof rawAffectedRows === "number" ? rawAffectedRows : null;
+    if (affectedRows === 0) {
+      setRecapNotice(
+        "Status cancel tidak tersimpan karena tidak ada baris yang ter-update. Cek id data dan policy UPDATE/RLS di Supabase."
+      );
       setCancelStatusSaving(false);
       return false;
     }
