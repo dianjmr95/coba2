@@ -229,13 +229,23 @@ function getSupabaseErrorInfo(error: unknown) {
 function isMissingColumnError(error: unknown, columnName: string) {
   if (!error || typeof error !== "object") return false;
   const e = error as Record<string, unknown>;
+  const codeUpper = String(e.code ?? "").toUpperCase();
   const message = String(e.message ?? "").toLowerCase();
   const details = String(e.details ?? "").toLowerCase();
   const col = columnName.toLowerCase();
+  if (codeUpper === "PGRST204" && (message.includes(col) || details.includes(col))) {
+    return true;
+  }
   return (
     message.includes("column") &&
     message.includes(col) &&
-    (message.includes("does not exist") || message.includes("not found") || details.includes("schema cache"))
+    (
+      message.includes("does not exist") ||
+      message.includes("not found") ||
+      message.includes("could not find") ||
+      message.includes("schema cache") ||
+      details.includes("schema cache")
+    )
   );
 }
 
@@ -252,6 +262,8 @@ function formatSupabaseError(action: string, error: unknown) {
     hint = "Akses ditolak oleh RLS policy. Pastikan policy SELECT/INSERT/UPDATE/DELETE untuk role authenticated sudah benar.";
   } else if (codeUpper === "PGRST116") {
     hint = "Tabel tidak ditemukan/terbaca. Cek nama tabel di env dan schema public.";
+  } else if (codeUpper === "PGRST204") {
+    hint = "Kolom yang diakses tidak terdeteksi di schema cache. Cek migration kolom tabel rekap atau refresh schema cache Supabase.";
   } else if (code === "23505") {
     hint = "Terjadi bentrok data duplikat. Silakan coba simpan ulang.";
   } else if (isTemporarySupabaseError(error)) {
@@ -836,6 +848,8 @@ export default function Page() {
   const [recapMenu, setRecapMenu] = useState<"input" | "hasil">("input");
   const [openBiayaDetailRow, setOpenBiayaDetailRow] = useState<SalesRecapRow | null>(null);
   const [editRecapDraft, setEditRecapDraft] = useState<RecapEditDraft | null>(null);
+  const [isEditRecapSaving, setIsEditRecapSaving] = useState(false);
+  const [editRecapNotice, setEditRecapNotice] = useState("");
   const [cancelDraftRow, setCancelDraftRow] = useState<SalesRecapRow | null>(null);
   const [cancelDraftClosingId, setCancelDraftClosingId] = useState<string | null>(null);
   const [cancelDraftReason, setCancelDraftReason] = useState("");
@@ -1892,6 +1906,7 @@ export default function Page() {
     }
     setOpenBiayaDetailRow(null);
     closeCancelDraft(true);
+    setEditRecapNotice("");
     setEditRecapDraft({
       id: row.id,
       tanggal: row.tanggal,
@@ -1940,9 +1955,14 @@ export default function Page() {
   async function saveEditRecap() {
     if (authUser?.role === "viewer") {
       setRecapNotice("Role viewer tidak punya izin mengubah data.");
+      setEditRecapNotice("Role viewer tidak punya izin mengubah data.");
       return;
     }
-    if (!editRecapDraft) return;
+    if (isEditRecapSaving) return;
+    if (!editRecapDraft) {
+      setEditRecapNotice("Mode edit sudah tertutup. Klik Edit lagi lalu simpan.");
+      return;
+    }
 
     const sanitizedBiayaDetail = editRecapDraft.biayaDetail
       .map((item) => ({
@@ -1973,38 +1993,61 @@ export default function Page() {
       catatan: editRecapDraft.catatan
     };
 
-    let updateResult = await runSupabaseWithRetry(
-      () =>
-        supabase
-          .from(RECAP_SUPABASE_TABLE)
-          .update(toRecapDbPayload(updatedRow, supportsOrderItemsColumn))
-          .eq("id", updatedRow.id),
-      2
-    );
-    if (updateResult.error && supportsOrderItemsColumn && isMissingColumnError(updateResult.error, "order_items")) {
-      setSupportsOrderItemsColumn(false);
-      updateResult = await runSupabaseWithRetry(
+    setIsEditRecapSaving(true);
+    setEditRecapNotice("Memproses simpan perubahan...");
+    try {
+      let updateResult = await runSupabaseWithRetry(
         () =>
           supabase
             .from(RECAP_SUPABASE_TABLE)
-            .update(toRecapDbPayload(updatedRow, false))
+            .update(toRecapDbPayload(updatedRow, supportsOrderItemsColumn), { count: "exact" })
             .eq("id", updatedRow.id),
         2
       );
-    }
-    if (updateResult.error) {
-      setRecapNotice(formatSupabaseError("Memperbarui data rekap", updateResult.error));
-      return;
-    }
+      if (updateResult.error && supportsOrderItemsColumn && isMissingColumnError(updateResult.error, "order_items")) {
+        setSupportsOrderItemsColumn(false);
+        updateResult = await runSupabaseWithRetry(
+          () =>
+            supabase
+              .from(RECAP_SUPABASE_TABLE)
+              .update(toRecapDbPayload(updatedRow, false), { count: "exact" })
+              .eq("id", updatedRow.id),
+          2
+        );
+      }
+      if (updateResult.error) {
+        const message = formatSupabaseError("Memperbarui data rekap", updateResult.error);
+        setRecapNotice(message);
+        setEditRecapNotice(message);
+        return;
+      }
 
-    setRecapRows((prev) => {
-      const next = prev.map((row) => (row.id === updatedRow.id ? updatedRow : row));
-      writeRecapCache(next);
-      return next;
-    });
-    setOpenBiayaDetailRow((prev) => (prev && prev.id === updatedRow.id ? updatedRow : prev));
-    setEditRecapDraft(null);
-    setRecapNotice("Data rekap berhasil diperbarui di Supabase.");
+      const rawAffectedRows = (updateResult as { count?: unknown }).count;
+      const affectedRows = typeof rawAffectedRows === "number" ? rawAffectedRows : null;
+      if (affectedRows === 0) {
+        const message =
+          "Data tidak tersimpan karena tidak ada baris yang ter-update. Cek id data dan policy UPDATE/RLS di Supabase."
+        setRecapNotice(message);
+        setEditRecapNotice(message);
+        return;
+      }
+
+      setRecapRows((prev) => {
+        const next = prev.map((row) => (row.id === updatedRow.id ? updatedRow : row));
+        writeRecapCache(next);
+        return next;
+      });
+      setOpenBiayaDetailRow((prev) => (prev && prev.id === updatedRow.id ? updatedRow : prev));
+      setEditRecapDraft(null);
+      setRecapNotice("Data rekap berhasil diperbarui di Supabase.");
+      setEditRecapNotice("");
+    } catch (error) {
+      const message = formatSupabaseError("Memperbarui data rekap", error);
+      setRecapNotice(message);
+      setEditRecapNotice(message);
+    } finally {
+      setIsEditRecapSaving(false);
+    }
   }
 
   async function toggleRecapCancelStatus(row: SalesRecapRow) {
@@ -4685,6 +4728,9 @@ export default function Page() {
                           <span>Catatan</span>
                           <input value={editRecapDraft.catatan} onChange={(e) => updateEditRecapField("catatan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                         </label>
+                        {editRecapNotice ? (
+                          <p className="mt-2 text-xs text-slate-600">{editRecapNotice}</p>
+                        ) : null}
                         <div className="mt-2 flex items-center justify-end gap-2">
                           <button
                             type="button"
@@ -4696,9 +4742,10 @@ export default function Page() {
                           <button
                             type="button"
                             onClick={saveEditRecap}
-                            className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800"
+                            disabled={isEditRecapSaving}
+                            className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
                           >
-                            Simpan Perubahan
+                            {isEditRecapSaving ? "Menyimpan..." : "Simpan Perubahan"}
                           </button>
                         </div>
                       </div>
@@ -4954,6 +5001,9 @@ export default function Page() {
                                   <span>Catatan</span>
                                   <input value={editRecapDraft.catatan} onChange={(e) => updateEditRecapField("catatan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                                 </label>
+                                {editRecapNotice ? (
+                                  <p className="mt-2 text-xs text-slate-600">{editRecapNotice}</p>
+                                ) : null}
                                 <div className="mt-2 flex items-center justify-end gap-2">
                                   <button
                                     type="button"
@@ -4965,9 +5015,10 @@ export default function Page() {
                                   <button
                                     type="button"
                                     onClick={saveEditRecap}
-                                    className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-800"
+                                    disabled={isEditRecapSaving}
+                                    className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
                                   >
-                                    Simpan Perubahan
+                                    {isEditRecapSaving ? "Menyimpan..." : "Simpan Perubahan"}
                                   </button>
                                 </div>
                               </div>
