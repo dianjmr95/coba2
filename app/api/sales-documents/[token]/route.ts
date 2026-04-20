@@ -1,0 +1,110 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getSupabaseAdmin } from "../../../../lib/supabaseAdmin";
+
+export const runtime = "nodejs";
+const FIXED_ADMIN_EMAIL = String(
+  process.env.FIXED_ADMIN_EMAIL || "luluklisdiantoro535@gmail.com"
+).trim().toLowerCase();
+
+function getBearerToken(request: NextRequest) {
+  const authHeader = request.headers.get("authorization") || request.headers.get("Authorization") || "";
+  if (!authHeader.toLowerCase().startsWith("bearer ")) return "";
+  return authHeader.slice(7).trim();
+}
+
+export async function GET(_request: NextRequest, context: { params: Promise<{ token: string }> }) {
+  try {
+    const { token } = await context.params;
+    const publicToken = String(token || "").trim();
+    if (!publicToken) {
+      return NextResponse.json({ ok: false, error: "Token dokumen tidak valid." }, { status: 400 });
+    }
+
+    const supabaseAdmin = getSupabaseAdmin();
+    const { data, error } = await supabaseAdmin
+      .from("sales_documents")
+      .select(
+        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, print_count, last_printed_at, created_at"
+      )
+      .eq("public_token", publicToken)
+      .maybeSingle();
+
+    if (error) {
+      throw new Error(`Gagal membaca dokumen: ${error.message}`);
+    }
+    if (!data) {
+      return NextResponse.json({ ok: false, error: "Dokumen tidak ditemukan." }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      data: {
+        publicToken: data.public_token,
+        documentNo: data.document_no,
+        documentType: data.document_type,
+        invoiceDate: data.invoice_date,
+        validUntil: data.valid_until,
+        buyer: data.buyer,
+        phone: data.phone,
+        whatsapp: data.whatsapp,
+        address: data.address,
+        courier: data.courier,
+        salesPic: data.sales_pic,
+        notes: data.notes,
+        items: Array.isArray(data.items) ? data.items : [],
+        subtotal: Number(data.subtotal) || 0,
+        printCount: Number(data.print_count) || 0,
+        lastPrintedAt: data.last_printed_at,
+        createdAt: data.created_at
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Terjadi error server.";
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: NextRequest, context: { params: Promise<{ token: string }> }) {
+  try {
+    const { token } = await context.params;
+    const publicToken = String(token || "").trim();
+    if (!publicToken) {
+      return NextResponse.json({ ok: false, error: "Token dokumen tidak valid." }, { status: 400 });
+    }
+
+    const bearerToken = getBearerToken(request);
+    if (!bearerToken) {
+      return NextResponse.json({ ok: false, error: "Token login tidak ditemukan." }, { status: 401 });
+    }
+
+    const supabaseAdmin = getSupabaseAdmin();
+    const {
+      data: { user }
+    } = await supabaseAdmin.auth.getUser(bearerToken);
+    const email = String(user?.email || "").trim().toLowerCase();
+    if (!user || !email) {
+      return NextResponse.json({ ok: false, error: "Token login tidak valid." }, { status: 401 });
+    }
+    if (email !== FIXED_ADMIN_EMAIL) {
+      return NextResponse.json({ ok: false, error: "Hanya role admin yang bisa menghapus dokumen." }, { status: 403 });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("sales_documents")
+      .delete()
+      .eq("public_token", publicToken)
+      .select("id")
+      .maybeSingle();
+    if (error) {
+      throw new Error(`Gagal menghapus dokumen: ${error.message}`);
+    }
+    if (!data?.id) {
+      return NextResponse.json({ ok: false, error: "Dokumen tidak ditemukan." }, { status: 404 });
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Terjadi error server.";
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+  }
+}

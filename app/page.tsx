@@ -52,12 +52,52 @@ type PresetItem = {
 
 type SectionId = "kalkulator-potongan" | "pembuatan-nota" | "rekap-penjualan";
 type UserRole = "admin" | "staff" | "viewer";
+type InvoiceDocumentType = "faktur" | "penawaran";
 
 type InvoiceItem = {
   id: string;
   nama: string;
   qty: number;
   harga: number;
+};
+type SalesDocumentSaveResponse = {
+  ok: boolean;
+  error?: string;
+  data?: {
+    documentNo: string;
+    publicToken: string;
+    shareUrl: string;
+  };
+};
+type SalesDocumentDetailResponse = {
+  ok: boolean;
+  error?: string;
+  data?: {
+    publicToken: string;
+    documentNo: string;
+    documentType: InvoiceDocumentType;
+    invoiceDate: string;
+    validUntil: string | null;
+    buyer: string;
+    phone: string;
+    whatsapp: string;
+    address: string;
+    courier: string;
+    salesPic: string;
+    notes: string;
+    items: Array<{ nama: string; qty: number; harga: number }>;
+    subtotal: number;
+  };
+};
+type SalesDocumentHistoryRow = {
+  id: string;
+  publicToken: string;
+  documentNo: string;
+  documentType: InvoiceDocumentType;
+  invoiceDate: string;
+  buyer: string;
+  subtotal: number;
+  createdAt: string | null;
 };
 
 type RecapOrderItem = {
@@ -488,6 +528,33 @@ function toRecapDbPayload(row: SalesRecapRow, includeOrderItems = true) {
   };
 }
 
+function normalizeSalesDocumentHistoryRow(value: unknown): SalesDocumentHistoryRow | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const id = String(row.id ?? "").trim();
+  const publicToken = String(row.public_token ?? row.publicToken ?? "").trim();
+  const documentNo = String(row.document_no ?? row.documentNo ?? "").trim();
+  const rawType = String(row.document_type ?? row.documentType ?? "faktur").toLowerCase();
+  const documentType: InvoiceDocumentType = rawType === "penawaran" ? "penawaran" : "faktur";
+  const invoiceDate = String(row.invoice_date ?? row.invoiceDate ?? "").trim();
+  const buyer = String(row.buyer ?? "").trim();
+  const subtotal = Math.max(0, Number(row.subtotal ?? 0) || 0);
+  const createdAtRaw = row.created_at ?? row.createdAt;
+  const createdAt = typeof createdAtRaw === "string" && createdAtRaw.trim() ? createdAtRaw : null;
+
+  if (!id || !publicToken || !documentNo || !invoiceDate) return null;
+  return {
+    id,
+    publicToken,
+    documentNo,
+    documentType,
+    invoiceDate,
+    buyer,
+    subtotal,
+    createdAt
+  };
+}
+
 function getLocalDateKey(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -495,16 +562,29 @@ function getLocalDateKey(date = new Date()) {
   return `${year}${month}${day}`;
 }
 
-function getNextInvoiceNumber() {
+function getNextInvoiceNumber(docType: InvoiceDocumentType = "faktur") {
   const todayKey = getLocalDateKey(new Date());
   let nextSeq = 1;
 
   try {
     const raw = window.localStorage.getItem(INVOICE_COUNTER_STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as { date?: string; seq?: number };
-      if (parsed?.date === todayKey && typeof parsed.seq === "number" && Number.isFinite(parsed.seq)) {
-        nextSeq = parsed.seq + 1;
+      const parsed = JSON.parse(raw) as {
+        date?: string;
+        seq?: number;
+        seqByType?: Partial<Record<InvoiceDocumentType, number>>;
+      };
+      if (parsed?.date === todayKey) {
+        const seqByType = parsed.seqByType ?? {};
+        const legacyFakturSeq =
+          typeof parsed.seq === "number" && Number.isFinite(parsed.seq) ? Math.max(0, parsed.seq) : 0;
+        const currentSeq =
+          typeof seqByType[docType] === "number" && Number.isFinite(seqByType[docType])
+            ? Math.max(0, Number(seqByType[docType]))
+            : docType === "faktur"
+              ? legacyFakturSeq
+              : 0;
+        nextSeq = currentSeq + 1;
       }
     }
   } catch {
@@ -512,15 +592,28 @@ function getNextInvoiceNumber() {
   }
 
   try {
+    const raw = window.localStorage.getItem(INVOICE_COUNTER_STORAGE_KEY);
+    const parsed = raw
+      ? (JSON.parse(raw) as { date?: string; seqByType?: Partial<Record<InvoiceDocumentType, number>> })
+      : null;
+    const baseSeqByType: Record<InvoiceDocumentType, number> =
+      parsed?.date === todayKey
+        ? {
+            faktur: Math.max(0, Number(parsed?.seqByType?.faktur || 0)),
+            penawaran: Math.max(0, Number(parsed?.seqByType?.penawaran || 0))
+          }
+        : { faktur: 0, penawaran: 0 };
+    baseSeqByType[docType] = nextSeq;
     window.localStorage.setItem(
       INVOICE_COUNTER_STORAGE_KEY,
-      JSON.stringify({ date: todayKey, seq: nextSeq })
+      JSON.stringify({ date: todayKey, seqByType: baseSeqByType })
     );
   } catch {
     // ignore storage write errors
   }
 
-  return `STCSO-${todayKey}-${String(nextSeq).padStart(3, "0")}`;
+  const prefix = docType === "faktur" ? "STCSO" : "STCSPN";
+  return `${prefix}-${todayKey}-${String(nextSeq).padStart(3, "0")}`;
 }
 
 function cariHargaRekomendasi(targetNet: number, hitungNetDariHarga: (harga: number) => number) {
@@ -851,13 +944,28 @@ export default function Page() {
   const [authNotice, setAuthNotice] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [invoiceNo, setInvoiceNo] = useState("");
+  const [invoicePublicToken, setInvoicePublicToken] = useState("");
+  const [invoiceDocType, setInvoiceDocType] = useState<InvoiceDocumentType>("faktur");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [invoiceValidUntil, setInvoiceValidUntil] = useState(new Date().toISOString().slice(0, 10));
+  const [invoiceSalesPic, setInvoiceSalesPic] = useState("");
   const [invoiceBuyer, setInvoiceBuyer] = useState("");
   const [invoicePhone, setInvoicePhone] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
   const [invoiceAddress, setInvoiceAddress] = useState("");
   const [invoiceCourier, setInvoiceCourier] = useState("");
   const [invoiceNotes, setInvoiceNotes] = useState("");
+  const [invoiceSaveNotice, setInvoiceSaveNotice] = useState("");
+  const [isInvoiceSaving, setIsInvoiceSaving] = useState(false);
+  const [invoiceHistoryRows, setInvoiceHistoryRows] = useState<SalesDocumentHistoryRow[]>([]);
+  const [invoiceHistoryLoading, setInvoiceHistoryLoading] = useState(false);
+  const [invoiceHistoryNotice, setInvoiceHistoryNotice] = useState("");
+  const [invoiceHistoryDeletingToken, setInvoiceHistoryDeletingToken] = useState<string | null>(null);
+  const [invoiceHistoryEditingToken, setInvoiceHistoryEditingToken] = useState<string | null>(null);
+  const [invoiceHistoryTypeFilter, setInvoiceHistoryTypeFilter] = useState<"Semua" | InvoiceDocumentType>("Semua");
+  const [invoiceHistoryStartDate, setInvoiceHistoryStartDate] = useState("");
+  const [invoiceHistoryEndDate, setInvoiceHistoryEndDate] = useState("");
+  const [invoiceHistoryBuyerQuery, setInvoiceHistoryBuyerQuery] = useState("");
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([
     { id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }
   ]);
@@ -910,6 +1018,8 @@ export default function Page() {
   const [cancelTrendDays, setCancelTrendDays] = useState<7 | 14 | 30 | "all">(7);
   const [supportsOrderItemsColumn, setSupportsOrderItemsColumn] = useState(true);
   const cancelDraftCloseTimerRef = useRef<number | null>(null);
+  const invoiceDocLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
+  const invoiceDocUpperLabel = invoiceDocType === "faktur" ? "FAKTUR PENJUALAN" : "SURAT PENAWARAN BARANG";
 
   const currentPresetData: PresetData = {
     tokopediaFee,
@@ -1001,6 +1111,35 @@ export default function Page() {
         return;
       }
       setRecapNotice(formatSupabaseError("Memuat data rekap", error));
+    }
+  }, []);
+
+  const loadInvoiceHistory = useCallback(async () => {
+    setInvoiceHistoryLoading(true);
+    try {
+      const { data, error, status } = await supabase
+        .from("sales_documents")
+        .select("id, public_token, document_no, document_type, invoice_date, buyer, subtotal, created_at")
+        .order("created_at", { ascending: false })
+        .limit(300);
+
+      if (error) {
+        setInvoiceHistoryNotice(formatSupabaseError(`Memuat riwayat dokumen (status ${status || "-"})`, error));
+        setInvoiceHistoryRows([]);
+        return;
+      }
+
+      const rows = (Array.isArray(data) ? data : [])
+        .map((item) => normalizeSalesDocumentHistoryRow(item))
+        .filter((item): item is SalesDocumentHistoryRow => Boolean(item));
+
+      setInvoiceHistoryRows(rows);
+      setInvoiceHistoryNotice(rows.length ? "" : "Belum ada dokumen tersimpan.");
+    } catch (error) {
+      setInvoiceHistoryNotice(formatSupabaseError("Memuat riwayat dokumen", error));
+      setInvoiceHistoryRows([]);
+    } finally {
+      setInvoiceHistoryLoading(false);
     }
   }, []);
 
@@ -1162,6 +1301,40 @@ export default function Page() {
       void supabase.removeChannel(channel);
     };
   }, [activeSection, authUser, loadRecapRows]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    if (activeSection !== "pembuatan-nota") return;
+    void loadInvoiceHistory();
+  }, [activeSection, authUser, loadInvoiceHistory]);
+
+  useEffect(() => {
+    if (!authUser) return;
+    if (activeSection !== "pembuatan-nota") return;
+
+    const channel = supabase
+      .channel("sales-documents-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "sales_documents"
+        },
+        () => {
+          void loadInvoiceHistory();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [activeSection, authUser, loadInvoiceHistory]);
+
+  useEffect(() => {
+    setInvoiceSaveNotice("");
+  }, [invoiceDocType]);
 
   const recapOrderTotals = useMemo(() => {
     return recapOrderItems.reduce(
@@ -1444,7 +1617,10 @@ export default function Page() {
     if (!confirmed) return;
 
     setInvoiceNo("");
+    setInvoicePublicToken("");
     setInvoiceDate(new Date().toISOString().slice(0, 10));
+    setInvoiceValidUntil(new Date().toISOString().slice(0, 10));
+    setInvoiceSalesPic("");
     setInvoiceBuyer("");
     setInvoicePhone("");
     setInvoiceWhatsapp("");
@@ -1452,6 +1628,7 @@ export default function Page() {
     setInvoiceAddress("");
     setInvoiceNotes("");
     setInvoiceItems([{ id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }]);
+    setInvoiceSaveNotice("");
   }
 
   function updateInvoiceItem(id: string, key: "nama" | "qty" | "harga", value: string | number) {
@@ -1464,10 +1641,120 @@ export default function Page() {
     () => invoiceItems.reduce((acc, item) => acc + Math.max(0, item.qty) * Math.max(0, item.harga), 0),
     [invoiceItems]
   );
+  const filteredInvoiceHistory = useMemo(() => {
+    const buyerNeedle = invoiceHistoryBuyerQuery.trim().toLowerCase();
+    return invoiceHistoryRows.filter((row) => {
+      if (invoiceHistoryTypeFilter !== "Semua" && row.documentType !== invoiceHistoryTypeFilter) {
+        return false;
+      }
+      if (invoiceHistoryStartDate && row.invoiceDate < invoiceHistoryStartDate) {
+        return false;
+      }
+      if (invoiceHistoryEndDate && row.invoiceDate > invoiceHistoryEndDate) {
+        return false;
+      }
+      if (buyerNeedle && !row.buyer.toLowerCase().includes(buyerNeedle)) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    invoiceHistoryBuyerQuery,
+    invoiceHistoryEndDate,
+    invoiceHistoryRows,
+    invoiceHistoryStartDate,
+    invoiceHistoryTypeFilter
+  ]);
 
-  function printInvoice() {
-    const generatedInvoiceNo = getNextInvoiceNumber();
-    setInvoiceNo(generatedInvoiceNo);
+  function createDocumentPublicToken() {
+    if (typeof globalThis !== "undefined" && globalThis.crypto && "randomUUID" in globalThis.crypto) {
+      return globalThis.crypto.randomUUID().replace(/-/g, "");
+    }
+    return `${Date.now()}${Math.random().toString(16).slice(2)}`;
+  }
+
+  async function saveInvoiceDocument(options?: { forceNewNumber?: boolean; markPrinted?: boolean }) {
+    const forceNewNumber = Boolean(options?.forceNewNumber);
+    const markPrinted = options?.markPrinted !== false;
+
+    if (isInvoiceSaving) {
+      throw new Error("Dokumen sedang disimpan. Coba lagi beberapa detik.");
+    }
+
+    const documentNo = forceNewNumber
+      ? getNextInvoiceNumber(invoiceDocType)
+      : invoiceNo || getNextInvoiceNumber(invoiceDocType);
+    const publicToken = forceNewNumber ? createDocumentPublicToken() : invoicePublicToken || createDocumentPublicToken();
+    const normalizedItems = invoiceItems
+      .map((item) => ({
+        nama: String(item.nama || "").trim(),
+        qty: Math.max(0, Number(item.qty) || 0),
+        harga: Math.max(0, Number(item.harga) || 0)
+      }))
+      .filter((item) => item.nama && item.qty > 0);
+
+    if (!normalizedItems.length) {
+      throw new Error("Isi minimal 1 item barang valid sebelum menyimpan dokumen.");
+    }
+
+    setIsInvoiceSaving(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) throw new Error("Sesi login tidak ditemukan. Silakan login ulang.");
+
+      const response = await fetch("/api/sales-documents", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`
+        },
+        body: JSON.stringify({
+          publicToken,
+          documentNo,
+          documentType: invoiceDocType,
+          invoiceDate,
+          validUntil: invoiceDocType === "penawaran" ? invoiceValidUntil || null : null,
+          buyer: invoiceBuyer,
+          phone: invoicePhone,
+          whatsapp: invoiceWhatsapp,
+          address: invoiceAddress,
+          courier: invoiceCourier,
+          salesPic: invoiceDocType === "penawaran" ? invoiceSalesPic : "",
+          notes: invoiceNotes,
+          items: normalizedItems,
+          subtotal: invoiceSubtotal,
+          markPrinted
+        })
+      });
+
+      const parsed = (await response.json()) as SalesDocumentSaveResponse;
+      if (!response.ok || !parsed.ok || !parsed.data) {
+        throw new Error(parsed.error || "Gagal menyimpan dokumen ke Supabase.");
+      }
+
+      setInvoiceNo(parsed.data.documentNo);
+      setInvoicePublicToken(parsed.data.publicToken);
+      setInvoiceSaveNotice("Dokumen tersimpan di Supabase dan siap dibagikan.");
+      void loadInvoiceHistory();
+      return parsed.data;
+    } finally {
+      setIsInvoiceSaving(false);
+    }
+  }
+
+  async function printInvoice() {
+    let savedDoc: { documentNo: string; publicToken: string; shareUrl: string };
+    try {
+      savedDoc = await saveInvoiceDocument({ forceNewNumber: true, markPrinted: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menyimpan dokumen.";
+      setInvoiceSaveNotice(message);
+      window.alert(message);
+      return;
+    }
+
+    const generatedInvoiceNo = savedDoc.documentNo;
 
     const rows = invoiceItems
       .map((item, idx) => {
@@ -1488,12 +1775,20 @@ export default function Page() {
       month: "2-digit",
       year: "numeric"
     }).format(new Date());
+    const validUntilDate = invoiceValidUntil
+      ? new Intl.DateTimeFormat("id-ID", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric"
+        }).format(new Date(invoiceValidUntil))
+      : "-";
 
+    const docLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
     const html = `<!doctype html>
     <html>
       <head>
         <meta charset="utf-8" />
-        <title>Faktur ${generatedInvoiceNo}</title>
+        <title>${docLabel} ${generatedInvoiceNo}</title>
         <style>
           @page { size: A4; margin: 20mm; }
           body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 12px; }
@@ -1522,22 +1817,32 @@ export default function Page() {
           <div class="company">
             <h1>STARCOMP SOLO</h1>
             <p>Computer Store</p>
-            <p>Faktur Penjualan Resmi</p>
+            <p>${invoiceDocType === "faktur" ? "Faktur Penjualan Resmi" : "Dokumen Penawaran Barang"}</p>
           </div>
         </div>
 
-        <div class="title">FAKTUR PENJUALAN</div>
+        <div class="title">${invoiceDocUpperLabel}</div>
 
         <div class="meta">
           <div class="box">
-            <p><strong>No Faktur:</strong> ${generatedInvoiceNo}</p>
+            <p><strong>No ${docLabel}:</strong> ${generatedInvoiceNo}</p>
             <p><strong>Tanggal Cetak:</strong> ${printDate}</p>
+            ${
+              invoiceDocType === "penawaran"
+                ? `<p><strong>Berlaku Sampai:</strong> ${validUntilDate}</p>`
+                : ""
+            }
             <p><strong>Kurir:</strong> ${invoiceCourier || "-"}</p>
           </div>
           <div class="box">
             <p><strong>Pembeli:</strong> ${invoiceBuyer || "-"}</p>
             <p><strong>Telepon:</strong> ${invoicePhone || "-"}</p>
             <p><strong>Alamat:</strong> ${invoiceAddress || "-"}</p>
+            ${
+              invoiceDocType === "penawaran"
+                ? `<p><strong>PIC Sales:</strong> ${invoiceSalesPic || "-"}</p>`
+                : ""
+            }
           </div>
         </div>
 
@@ -1554,8 +1859,9 @@ export default function Page() {
           <tbody>${rows}</tbody>
         </table>
 
-        <div class="total">TOTAL: ${rupiah(invoiceSubtotal)}</div>
+        <div class="total">${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceSubtotal)}</div>
         <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
+        <div class="notes"><strong>Link Dokumen:</strong> ${savedDoc.shareUrl}</div>
 
         <div class="sign">
           <div class="sign-box">
@@ -1599,19 +1905,36 @@ export default function Page() {
     return digits;
   }
 
-  function sendInvoiceToWhatsapp() {
+  async function sendInvoiceToWhatsapp() {
     const target = normalizeWhatsappNumber(invoiceWhatsapp || invoicePhone);
     if (!target) {
       window.alert("Isi No WhatsApp tujuan terlebih dahulu.");
       return;
     }
 
-    const draftNo = invoiceNo || "Belum dicetak";
+    let savedDoc: { documentNo: string; publicToken: string; shareUrl: string };
+    try {
+      savedDoc = await saveInvoiceDocument({ forceNewNumber: !invoiceNo, markPrinted: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menyimpan dokumen.";
+      setInvoiceSaveNotice(message);
+      window.alert(message);
+      return;
+    }
+
+    const draftNo = savedDoc.documentNo || "Belum dicetak";
     const printDate = new Intl.DateTimeFormat("id-ID", {
       day: "2-digit",
       month: "2-digit",
       year: "numeric"
     }).format(new Date());
+    const validUntilDate = invoiceValidUntil
+      ? new Intl.DateTimeFormat("id-ID", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric"
+        }).format(new Date(invoiceValidUntil))
+      : "-";
 
     const lines = invoiceItems.map((item, idx) => {
       const qty = Math.max(0, item.qty);
@@ -1620,24 +1943,169 @@ export default function Page() {
       return `${idx + 1}. ${item.nama || "-"} x${qty} = ${rupiah(total)}`;
     });
 
+    const docLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
     const text = [
-      "*FAKTUR PENJUALAN STARCOMP SOLO*",
-      `No Faktur: ${draftNo}`,
+      `*${invoiceDocUpperLabel} STARCOMP SOLO*`,
+      `No ${docLabel}: ${draftNo}`,
       `Tanggal: ${printDate}`,
       `Pembeli: ${invoiceBuyer || "-"}`,
       `Telepon: ${invoicePhone || "-"}`,
       `Kurir: ${invoiceCourier || "-"}`,
       `Alamat: ${invoiceAddress || "-"}`,
+      ...(invoiceDocType === "penawaran"
+        ? [`Berlaku sampai: ${validUntilDate}`, `PIC Sales: ${invoiceSalesPic || "-"}`]
+        : []),
       "",
       "*Rincian Barang:*",
       ...lines,
       "",
-      `*TOTAL: ${rupiah(invoiceSubtotal)}*`,
-      `Catatan: ${invoiceNotes || "-"}`
+      `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceSubtotal)}*`,
+      `Catatan: ${invoiceNotes || "-"}`,
+      `Link dokumen: ${savedDoc.shareUrl}`
     ].join("\n");
 
     const url = `https://wa.me/${target}?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank");
+  }
+
+  async function copyDocumentLinkByToken(publicToken: string) {
+    if (!publicToken) return;
+    const link = `${window.location.origin}/dokumen/${publicToken}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      setInvoiceSaveNotice("Link dokumen berhasil disalin.");
+    } catch {
+      setInvoiceSaveNotice(`Link dokumen: ${link}`);
+    }
+  }
+
+  async function copyDocumentLink() {
+    if (!invoicePublicToken) {
+      setInvoiceSaveNotice("Link belum tersedia. Simpan atau kirim dokumen dulu.");
+      return;
+    }
+    await copyDocumentLinkByToken(invoicePublicToken);
+  }
+
+  async function loadInvoiceHistoryDocumentToForm(publicToken: string) {
+    if (!publicToken) return false;
+    if (authUser?.role === "viewer") {
+      setInvoiceSaveNotice("Role viewer tidak punya izin mengubah dokumen.");
+      return false;
+    }
+
+    setInvoiceHistoryEditingToken(publicToken);
+    try {
+      const response = await fetch(`/api/sales-documents/${publicToken}`);
+      const payload = (await response.json()) as SalesDocumentDetailResponse;
+      if (!response.ok || !payload.ok || !payload.data) {
+        setInvoiceSaveNotice(payload.error || "Gagal memuat data dokumen.");
+        return false;
+      }
+
+      const detail = payload.data;
+      const nextItems =
+        Array.isArray(detail.items) && detail.items.length
+          ? detail.items.map((item, index) => ({
+              id: `${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`,
+              nama: String(item.nama || ""),
+              qty: Math.max(0, Number(item.qty) || 0),
+              harga: Math.max(0, Number(item.harga) || 0)
+            }))
+          : [{ id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }];
+
+      setInvoiceDocType(detail.documentType === "penawaran" ? "penawaran" : "faktur");
+      setInvoiceNo(detail.documentNo || "");
+      setInvoicePublicToken(detail.publicToken || publicToken);
+      setInvoiceDate(detail.invoiceDate || new Date().toISOString().slice(0, 10));
+      setInvoiceValidUntil(detail.validUntil || new Date().toISOString().slice(0, 10));
+      setInvoiceSalesPic(detail.salesPic || "");
+      setInvoiceBuyer(detail.buyer || "");
+      setInvoicePhone(detail.phone || "");
+      setInvoiceWhatsapp(detail.whatsapp || detail.phone || "");
+      setInvoiceAddress(detail.address || "");
+      setInvoiceCourier(detail.courier || "");
+      setInvoiceNotes(detail.notes || "");
+      setInvoiceItems(nextItems);
+      setInvoiceSaveNotice(`Dokumen ${detail.documentNo} dimuat ke form. Kamu bisa edit lalu simpan/cetak ulang.`);
+      return true;
+    } catch (error) {
+      setInvoiceSaveNotice(formatSupabaseError("Memuat dokumen dari riwayat", error));
+      return false;
+    } finally {
+      setInvoiceHistoryEditingToken(null);
+    }
+  }
+
+  async function saveInvoiceHistoryEdits() {
+    if (authUser?.role === "viewer") {
+      setInvoiceSaveNotice("Role viewer tidak punya izin menyimpan perubahan dokumen.");
+      return;
+    }
+    if (!invoicePublicToken || !invoiceNo) {
+      setInvoiceSaveNotice("Pilih dokumen dari riwayat dulu sebelum simpan perubahan.");
+      return;
+    }
+    try {
+      await saveInvoiceDocument({ forceNewNumber: false, markPrinted: false });
+      setInvoiceSaveNotice(`Perubahan dokumen ${invoiceNo} berhasil disimpan.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menyimpan perubahan dokumen.";
+      setInvoiceSaveNotice(message);
+    }
+  }
+
+  function reprintHistoryDocument(publicToken: string) {
+    if (!publicToken) return;
+    if (authUser?.role === "viewer") {
+      setInvoiceSaveNotice("Role viewer tidak punya izin cetak ulang dokumen.");
+      return;
+    }
+    const url = `/dokumen/${publicToken}?autoprint=1`;
+    window.open(url, "_blank");
+  }
+
+  async function deleteInvoiceHistoryRow(row: SalesDocumentHistoryRow) {
+    if (authUser?.role !== "admin") {
+      setInvoiceSaveNotice("Hanya role admin yang bisa menghapus riwayat dokumen.");
+      return;
+    }
+    const confirmed = window.confirm(
+      `Yakin ingin menghapus dokumen ini?\n\nNo Dokumen: ${row.documentNo}\nJenis: ${row.documentType === "faktur" ? "Faktur" : "Penawaran"}\nPembeli: ${row.buyer || "-"}\n\nData yang dihapus tidak bisa dikembalikan.`
+    );
+    if (!confirmed) return;
+
+    setInvoiceHistoryDeletingToken(row.publicToken);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) {
+        setInvoiceSaveNotice("Sesi login tidak ditemukan. Silakan login ulang.");
+        return;
+      }
+
+      const response = await fetch(`/api/sales-documents/${row.publicToken}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        }
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string };
+      if (!response.ok || !payload.ok) {
+        setInvoiceSaveNotice(payload.error || "Gagal menghapus riwayat dokumen.");
+        return;
+      }
+
+      if (invoicePublicToken === row.publicToken) {
+        setInvoicePublicToken("");
+      }
+      setInvoiceSaveNotice(`Dokumen ${row.documentNo} berhasil dihapus.`);
+      void loadInvoiceHistory();
+    } catch (error) {
+      setInvoiceSaveNotice(formatSupabaseError("Menghapus riwayat dokumen", error));
+    } finally {
+      setInvoiceHistoryDeletingToken(null);
+    }
   }
 
   function addRecapOrderItem() {
@@ -3215,13 +3683,14 @@ export default function Page() {
       ]
     },
     "pembuatan-nota": {
-      title: "Mode Nota/Faktur Aktif",
-      subtitle: "Siapkan invoice cepat dengan data pembeli, item, dan ringkasan total.",
+      title: `Mode ${invoiceDocLabel} Aktif`,
+      subtitle: "Siapkan dokumen penjualan atau penawaran cepat dengan data pembeli, item, dan ringkasan total.",
       tone: "from-orange-50 to-white",
       chip: "bg-orange-100 text-orange-700",
       dot: "bg-orange-500",
-      badge: "Nota/Faktur",
+      badge: invoiceDocLabel,
       stats: [
+        `Jenis dokumen: ${invoiceDocLabel}`,
         `Jumlah item: ${invoiceItems.length}`,
         `Pembeli: ${invoiceBuyer || "-"}`,
         `Tanggal nota: ${invoiceDate || "-"}`
@@ -3245,6 +3714,7 @@ export default function Page() {
   const activeMeta = sectionMeta[activeSection];
   const currentRole = authUser?.role ?? null;
   const allowedSections = currentRole ? ROLE_SECTION_ACCESS[currentRole] : [];
+  const canManageDocuments = currentRole === "admin" || currentRole === "staff";
   const canManageRecap = currentRole === "admin" || currentRole === "staff";
   const canDeleteRecap = currentRole === "admin";
   const canManagePreset = currentRole === "admin" || currentRole === "staff";
@@ -4142,23 +4612,65 @@ export default function Page() {
       <section id="pembuatan-nota" className="animate-sweep-in">
         <article className="card-shell p-5">
           <div className="mb-3">
-            <h2 className="text-base font-bold">Jendela Nota / Faktur Penjualan</h2>
+            <h2 className="text-base font-bold">Jendela Nota / Faktur / Penawaran Barang</h2>
           </div>
 
           <div className="grid gap-4">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1.5 text-sm text-slate-600">
-                  <span>No Faktur (otomatis saat cetak)</span>
-                  <input value={invoiceNo} readOnly placeholder="Akan dibuat otomatis: STCSO-YYYYMMDD-001" className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-slate-800 outline-none" />
+                  <span>Jenis Dokumen</span>
+                  <select
+                    value={invoiceDocType}
+                    onChange={(e) => {
+                      setInvoiceDocType(e.target.value as InvoiceDocumentType);
+                      setInvoiceNo("");
+                      setInvoicePublicToken("");
+                    }}
+                    className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="faktur">Faktur Penjualan</option>
+                    <option value="penawaran">Penawaran Barang</option>
+                  </select>
+                </label>
+                <label className="grid gap-1.5 text-sm text-slate-600">
+                  <span>No {invoiceDocLabel} (otomatis saat cetak)</span>
+                  <input
+                    value={invoiceNo}
+                    readOnly
+                    placeholder={invoiceDocType === "faktur" ? "Akan dibuat otomatis: STCSO-YYYYMMDD-001" : "Akan dibuat otomatis: STCSPN-YYYYMMDD-001"}
+                    className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-slate-800 outline-none"
+                  />
                 </label>
                 <label className="grid gap-1.5 text-sm text-slate-600">
                   <span>Tanggal</span>
                   <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                 </label>
+                {invoiceDocType === "penawaran" ? (
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>Masa Berlaku Penawaran</span>
+                    <input
+                      type="date"
+                      value={invoiceValidUntil}
+                      onChange={(e) => setInvoiceValidUntil(e.target.value)}
+                      className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </label>
+                ) : null}
                 <label className="grid gap-1.5 text-sm text-slate-600">
                   <span>Nama Pembeli</span>
                   <input value={invoiceBuyer} onChange={(e) => setInvoiceBuyer(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                 </label>
+                {invoiceDocType === "penawaran" ? (
+                  <label className="grid gap-1.5 text-sm text-slate-600">
+                    <span>PIC Sales</span>
+                    <input
+                      value={invoiceSalesPic}
+                      onChange={(e) => setInvoiceSalesPic(e.target.value)}
+                      placeholder="Contoh: Budi - 0812xxxxxx"
+                      className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </label>
+                ) : null}
                 <label className="grid gap-1.5 text-sm text-slate-600">
                   <span>No Telepon</span>
                   <input value={invoicePhone} onChange={(e) => setInvoicePhone(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
@@ -4180,7 +4692,7 @@ export default function Page() {
 
               <div className="rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-slate-700">Item Penjualan</p>
+                  <p className="text-sm font-semibold text-slate-700">{invoiceDocType === "faktur" ? "Item Penjualan" : "Item Penawaran"}</p>
                   <button type="button" onClick={addInvoiceItem} className="rounded-xl border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-stone-100">Tambah Item</button>
                 </div>
                 <div className="grid gap-2">
@@ -4211,22 +4723,216 @@ export default function Page() {
                   onClick={resetInvoiceWithConfirmation}
                   className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
                 >
-                  Reset Nota
+                  Reset Dokumen
                 </button>
                 <button
                   type="button"
                   onClick={sendInvoiceToWhatsapp}
+                  disabled={isInvoiceSaving || !canManageDocuments}
                   className="rounded-2xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100"
                 >
-                  Kirim WhatsApp
+                  {isInvoiceSaving ? "Menyimpan..." : "Kirim WhatsApp"}
+                </button>
+                <button
+                  type="button"
+                  onClick={copyDocumentLink}
+                  disabled={!invoicePublicToken}
+                  className="rounded-2xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Salin Link Dokumen
                 </button>
                 <button
                   type="button"
                   onClick={printInvoice}
+                  disabled={isInvoiceSaving || !canManageDocuments}
                   className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
                 >
-                  Cetak Faktur
+                  {isInvoiceSaving
+                    ? "Menyimpan..."
+                    : invoiceDocType === "faktur"
+                      ? "Cetak Faktur"
+                      : "Cetak Penawaran"}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void saveInvoiceHistoryEdits();
+                  }}
+                  disabled={isInvoiceSaving || !canManageDocuments || !invoicePublicToken || !invoiceNo}
+                  className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Simpan Perubahan
+                </button>
+              </div>
+              {invoiceSaveNotice ? (
+                <p className="text-xs text-slate-600">{invoiceSaveNotice}</p>
+              ) : null}
+              {invoicePublicToken ? (
+                <p className="text-xs text-slate-600">
+                  Link dokumen:{" "}
+                  <a
+                    href={`/dokumen/${invoicePublicToken}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-sky-700 underline"
+                  >
+                    {`/dokumen/${invoicePublicToken}`}
+                  </a>
+                </p>
+              ) : null}
+              <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-3">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-700">Riwayat Dokumen Tersimpan</p>
+                  <button
+                    type="button"
+                    onClick={() => void loadInvoiceHistory()}
+                    className="rounded-xl border border-stone-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                    disabled={invoiceHistoryLoading}
+                  >
+                    {invoiceHistoryLoading ? "Memuat..." : "Refresh"}
+                  </button>
+                </div>
+                <div className="mb-2 grid gap-2 md:grid-cols-4">
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Jenis</span>
+                    <select
+                      value={invoiceHistoryTypeFilter}
+                      onChange={(e) => setInvoiceHistoryTypeFilter(e.target.value as "Semua" | InvoiceDocumentType)}
+                      className="rounded-xl border border-stone-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    >
+                      <option value="Semua">Semua</option>
+                      <option value="faktur">Faktur</option>
+                      <option value="penawaran">Penawaran</option>
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Dari Tanggal</span>
+                    <input
+                      type="date"
+                      value={invoiceHistoryStartDate}
+                      onChange={(e) => setInvoiceHistoryStartDate(e.target.value)}
+                      className="rounded-xl border border-stone-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Sampai Tanggal</span>
+                    <input
+                      type="date"
+                      value={invoiceHistoryEndDate}
+                      onChange={(e) => setInvoiceHistoryEndDate(e.target.value)}
+                      className="rounded-xl border border-stone-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    <span>Cari Pembeli</span>
+                    <input
+                      value={invoiceHistoryBuyerQuery}
+                      onChange={(e) => setInvoiceHistoryBuyerQuery(e.target.value)}
+                      placeholder="Nama pembeli"
+                      className="rounded-xl border border-stone-200 bg-white px-2 py-1.5 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </label>
+                </div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                  <span>Total data: {invoiceHistoryRows.length}</span>
+                  <span>Hasil filter: {filteredInvoiceHistory.length}</span>
+                </div>
+                {invoiceHistoryNotice ? (
+                  <p className="mb-2 rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-slate-600">
+                    {invoiceHistoryNotice}
+                  </p>
+                ) : null}
+                <div className="overflow-x-auto rounded-xl border border-stone-200 bg-white">
+                  <table className="min-w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-stone-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b border-stone-200 px-2 py-2">Tanggal</th>
+                        <th className="border-b border-stone-200 px-2 py-2">Jenis</th>
+                        <th className="border-b border-stone-200 px-2 py-2">No Dokumen</th>
+                        <th className="border-b border-stone-200 px-2 py-2">Pembeli</th>
+                        <th className="border-b border-stone-200 px-2 py-2 text-right">Subtotal</th>
+                        <th className="border-b border-stone-200 px-2 py-2 text-right">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredInvoiceHistory.length ? (
+                        filteredInvoiceHistory.map((row) => (
+                          <tr key={row.id} className="border-t border-stone-100">
+                            <td className="px-2 py-2 text-slate-700">{row.invoiceDate}</td>
+                            <td className="px-2 py-2">
+                              <span className={row.documentType === "faktur" ? "rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700" : "rounded-lg border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700"}>
+                                {row.documentType === "faktur" ? "Faktur" : "Penawaran"}
+                              </span>
+                            </td>
+                            <td className="px-2 py-2 text-slate-700">{row.documentNo}</td>
+                            <td className="px-2 py-2 text-slate-700">{row.buyer || "-"}</td>
+                            <td className="px-2 py-2 text-right text-slate-700">{rupiah(row.subtotal)}</td>
+                            <td className="px-2 py-2">
+                              <div className="flex justify-end gap-1.5">
+                                <a
+                                  href={`/dokumen/${row.publicToken}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                                >
+                                  Buka
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void copyDocumentLinkByToken(row.publicToken);
+                                  }}
+                                  className="rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100"
+                                >
+                                  Salin Link
+                                </button>
+                                {canManageDocuments ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void loadInvoiceHistoryDocumentToForm(row.publicToken);
+                                    }}
+                                    disabled={invoiceHistoryEditingToken === row.publicToken}
+                                    className="rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {invoiceHistoryEditingToken === row.publicToken ? "Memuat..." : "Edit"}
+                                  </button>
+                                ) : null}
+                                {canManageDocuments ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => reprintHistoryDocument(row.publicToken)}
+                                    className="rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 transition hover:bg-indigo-100"
+                                  >
+                                    Cetak Ulang
+                                  </button>
+                                ) : null}
+                                {authUser?.role === "admin" ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void deleteInvoiceHistoryRow(row);
+                                    }}
+                                    disabled={invoiceHistoryDeletingToken === row.publicToken}
+                                    className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {invoiceHistoryDeletingToken === row.publicToken ? "Menghapus..." : "Hapus"}
+                                  </button>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} className="px-2 py-6 text-center text-sm text-slate-500">
+                            {invoiceHistoryLoading ? "Memuat riwayat dokumen..." : "Tidak ada data yang cocok dengan filter."}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
           </div>
         </article>
