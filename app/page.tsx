@@ -124,10 +124,16 @@ type SalesRecapRow = {
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
 const RECAP_CACHE_STORAGE_KEY = "sales-recap-cache-v1";
+const NAV_VISIBILITY_STORAGE_KEY = "starcomp-nav-hidden-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
 const PRESET_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_PRESET_TABLE || "potongan_presets";
 const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
+const SECTION_LABEL: Record<SectionId, string> = {
+  "kalkulator-potongan": "Kalkulator Potongan",
+  "pembuatan-nota": "Pembuatan Nota/Faktur",
+  "rekap-penjualan": "Rekap Penjualan"
+};
 const ROLE_SECTION_ACCESS: Record<UserRole, SectionId[]> = {
   admin: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
   staff: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
@@ -781,8 +787,8 @@ export default function Page() {
   const [presetNotice, setPresetNotice] = useState("");
   const [isPresetSaving, setIsPresetSaving] = useState(false);
   const importPresetRef = useRef<HTMLInputElement | null>(null);
-  const [showInvoiceWindow, setShowInvoiceWindow] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionId>("kalkulator-potongan");
+  const [isNavHidden, setIsNavHidden] = useState(true);
   const [authReady, setAuthReady] = useState(false);
   const [sessionUser, setSessionUser] = useState<User | null>(null);
   const [authUser, setAuthUser] = useState<{ id: string; email: string; role: UserRole } | null>(null);
@@ -3091,10 +3097,32 @@ export default function Page() {
   const canManageRecap = currentRole === "admin" || currentRole === "staff";
   const canDeleteRecap = currentRole === "admin";
   const canManagePreset = currentRole === "admin" || currentRole === "staff";
+  const shouldShowDesktopSidebar = !isNavHidden || currentRole === "admin";
+  const canQuickSwitchSection = allowedSections.length > 1;
   const roleEntries = useMemo(
     () => Object.entries(roleMap).sort((a, b) => a[0].localeCompare(b[0])),
     [roleMap]
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = window.localStorage.getItem(NAV_VISIBILITY_STORAGE_KEY);
+      if (saved === "0") setIsNavHidden(false);
+      if (saved === "1") setIsNavHidden(true);
+    } catch {
+      // ignore storage read error
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(NAV_VISIBILITY_STORAGE_KEY, isNavHidden ? "1" : "0");
+    } catch {
+      // ignore storage write error
+    }
+  }, [isNavHidden]);
 
   useEffect(() => {
     if (!currentRole) return;
@@ -3226,6 +3254,39 @@ export default function Page() {
         </div>
       </header>
 
+      <div className="mb-3 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setIsNavHidden((current) => !current)}
+          className="rounded-2xl border border-stone-300 bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+        >
+          {isNavHidden ? "Tampilkan Navigasi" : "Sembunyikan Navigasi"}
+        </button>
+      </div>
+
+      {canQuickSwitchSection ? (
+        <div className="mb-4 grid gap-2 rounded-2xl border border-stone-200 bg-white/85 p-3 sm:grid-cols-[1fr_auto] sm:items-end">
+          <label className="grid gap-1 text-xs text-slate-600">
+            <span className="font-semibold uppercase tracking-[0.12em] text-stone-600">Menu Aktif</span>
+            <select
+              value={activeSection}
+              onChange={(e) => setActiveSection(e.target.value as SectionId)}
+              className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+            >
+              {allowedSections.map((section) => (
+                <option key={`quick-switch-${section}`} value={section}>
+                  {SECTION_LABEL[section]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs text-slate-500">
+            Sedang di: <strong className="text-slate-700">{SECTION_LABEL[activeSection]}</strong>
+          </p>
+        </div>
+      ) : null}
+
+      {!isNavHidden ? (
       <div className="sticky top-2 z-30 mb-4 lg:hidden">
         <div className="card-shell border-stone-200/80 bg-white/90 p-2 backdrop-blur-md">
           <p className="mb-2 px-1 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
@@ -3272,51 +3333,57 @@ export default function Page() {
           </div>
         </div>
       </div>
+      ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
+      <div className={`grid gap-4 ${shouldShowDesktopSidebar ? "lg:grid-cols-[260px_1fr]" : "lg:grid-cols-1"}`}>
+        {shouldShowDesktopSidebar ? (
         <aside className="card-shell hidden h-fit p-3 lg:sticky lg:top-4 lg:block">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
-          <nav className="grid gap-2 text-sm">
-            {allowedSections.includes("kalkulator-potongan") ? (
-              <button
-                type="button"
-                onClick={() => setActiveSection("kalkulator-potongan")}
-                className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
-                  activeSection === "kalkulator-potongan"
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
-                }`}
-              >
-                Kalkulator Potongan
-              </button>
-            ) : null}
-            {allowedSections.includes("pembuatan-nota") ? (
-              <button
-                type="button"
-                onClick={() => setActiveSection("pembuatan-nota")}
-                className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
-                  activeSection === "pembuatan-nota"
-                    ? "border-orange-300 bg-orange-50 text-orange-700"
-                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
-                }`}
-              >
-                Pembuatan Nota/Faktur
-              </button>
-            ) : null}
-            {allowedSections.includes("rekap-penjualan") ? (
-              <button
-                type="button"
-                onClick={() => setActiveSection("rekap-penjualan")}
-                className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
-                  activeSection === "rekap-penjualan"
-                    ? "border-sky-300 bg-sky-50 text-sky-700"
-                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
-                }`}
-              >
-                Rekap Penjualan Marketplace
-              </button>
-            ) : null}
-          </nav>
+          {!isNavHidden ? (
+            <>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
+              <nav className="grid gap-2 text-sm">
+                {allowedSections.includes("kalkulator-potongan") ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("kalkulator-potongan")}
+                    className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
+                      activeSection === "kalkulator-potongan"
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                        : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                    }`}
+                  >
+                    Kalkulator Potongan
+                  </button>
+                ) : null}
+                {allowedSections.includes("pembuatan-nota") ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("pembuatan-nota")}
+                    className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
+                      activeSection === "pembuatan-nota"
+                        ? "border-orange-300 bg-orange-50 text-orange-700"
+                        : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                    }`}
+                  >
+                    Pembuatan Nota/Faktur
+                  </button>
+                ) : null}
+                {allowedSections.includes("rekap-penjualan") ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("rekap-penjualan")}
+                    className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
+                      activeSection === "rekap-penjualan"
+                        ? "border-sky-300 bg-sky-50 text-sky-700"
+                        : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                    }`}
+                  >
+                    Rekap Penjualan Marketplace
+                  </button>
+                ) : null}
+              </nav>
+            </>
+          ) : null}
 
           {currentRole === "admin" ? (
             <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/90 p-3">
@@ -3402,6 +3469,7 @@ export default function Page() {
             </div>
           ) : null}
         </aside>
+        ) : null}
 
         <div className="min-w-0 space-y-5">
           {activeSection === "rekap-penjualan" ? (
@@ -3890,19 +3958,11 @@ export default function Page() {
       {activeSection === "pembuatan-nota" ? (
       <section id="pembuatan-nota" className="animate-sweep-in">
         <article className="card-shell p-5">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="mb-3">
             <h2 className="text-base font-bold">Jendela Nota / Faktur Penjualan</h2>
-            <button
-              type="button"
-              onClick={() => setShowInvoiceWindow((v) => !v)}
-              className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
-            >
-              {showInvoiceWindow ? "Tutup Jendela" : "Buka Jendela"}
-            </button>
           </div>
 
-          {showInvoiceWindow ? (
-            <div className="grid gap-4">
+          <div className="grid gap-4">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1.5 text-sm text-slate-600">
                   <span>No Faktur (otomatis saat cetak)</span>
@@ -3995,10 +4055,7 @@ export default function Page() {
                   Cetak Faktur
                 </button>
               </div>
-            </div>
-          ) : (
-            <p className="text-sm text-slate-600">Klik "Buka Jendela" untuk membuat nota/faktur penjualan terpisah dari kalkulator.</p>
-          )}
+          </div>
         </article>
       </section>
       ) : null}
