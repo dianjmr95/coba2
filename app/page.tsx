@@ -141,6 +141,7 @@ const NAV_VISIBILITY_STORAGE_KEY = "starcomp-nav-hidden-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
 const PRESET_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_PRESET_TABLE || "potongan_presets";
 const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
+const ORDER_ITEMS_FEATURE_START_DATE = "2026-04-18";
 const ENABLE_AUTO_PRICE_FETCH = String(process.env.NEXT_PUBLIC_ENABLE_AUTO_PRICE_FETCH || "").toLowerCase() === "true";
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
 const SECTION_LABEL: Record<SectionId, string> = {
@@ -301,6 +302,20 @@ const toSafeNumber = (value: unknown) => {
   return 0;
 };
 
+function calcRecapOrderTotals(items: RecapOrderSnapshot[]) {
+  return items.reduce(
+    (acc, item) => {
+      const qty = Math.max(0, Number(item.qty) || 0);
+      const hargaJual = Math.max(0, Number(item.hargaJual) || 0);
+      const modal = Math.max(0, Number(item.modal) || 0);
+      acc.omzet += qty * hargaJual;
+      acc.modal += qty * modal;
+      return acc;
+    },
+    { omzet: 0, modal: 0 }
+  );
+}
+
 function normalizeEmail(value: string) {
   return value.trim().toLowerCase();
 }
@@ -335,22 +350,35 @@ function normalizeRecapRow(value: unknown): SalesRecapRow | null {
 
   const biayaTotal = toSafeNumber(it.ongkir ?? it.biaya);
   const rawOrderItems = it.orderItems ?? it.order_items;
-  const orderItems = Array.isArray(rawOrderItems)
-    ? rawOrderItems
+  const parsedOrderItems =
+    Array.isArray(rawOrderItems)
+      ? rawOrderItems
+      : typeof rawOrderItems === "string"
+        ? (() => {
+            try {
+              const parsed = JSON.parse(rawOrderItems);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })()
+        : [];
+  const orderItems = parsedOrderItems
         .map((entry) => {
           if (typeof entry !== "object" || entry === null) return null;
           const e = entry as Record<string, unknown>;
-          const nama = typeof e.nama === "string" ? e.nama.trim() : "";
+          const nama = typeof (e.nama ?? e.nama_barang ?? e.product_name ?? e.name) === "string"
+            ? String(e.nama ?? e.nama_barang ?? e.product_name ?? e.name).trim()
+            : "";
           if (!nama) return null;
           return {
             nama,
-            hargaJual: toSafeNumber(e.hargaJual ?? e.harga_jual),
-            modal: toSafeNumber(e.modal),
-            qty: Math.max(0, Number(e.qty ?? 0) || 0)
+            hargaJual: toSafeNumber(e.hargaJual ?? e.harga_jual ?? e.harga ?? e.price),
+            modal: toSafeNumber(e.modal ?? e.harga_modal ?? e.cost),
+            qty: Math.max(0, Number(e.qty ?? e.jumlah ?? e.quantity ?? 0) || 0)
           } satisfies RecapOrderSnapshot;
         })
-        .filter((item): item is RecapOrderSnapshot => Boolean(item))
-    : [];
+        .filter((item): item is RecapOrderSnapshot => Boolean(item));
   const rawBiayaDetail = it.biayaDetail ?? it.biaya_detail;
   const biayaDetail = Array.isArray(rawBiayaDetail)
     ? rawBiayaDetail
@@ -2036,7 +2064,37 @@ export default function Page() {
     }
     setOpenBiayaDetailRow(null);
     closeCancelDraft(true);
-    setEditRecapNotice("");
+    const normalizedOrderItems = row.orderItems
+      .map((item) => ({
+          nama: item.nama,
+          hargaJual: Math.max(0, Number(item.hargaJual) || 0),
+          modal: Math.max(0, Number(item.modal) || 0),
+          qty: Math.max(0, Number(item.qty) || 0)
+        }))
+      .filter((item) => item.nama.trim() || item.hargaJual > 0 || item.modal > 0 || item.qty > 0);
+    const rowDateKey = row.tanggal && /^\d{4}-\d{2}-\d{2}$/.test(row.tanggal) ? row.tanggal : "";
+    const isAfterOrderItemsFeature = rowDateKey >= ORDER_ITEMS_FEATURE_START_DATE;
+    const needsLegacyFallback =
+      normalizedOrderItems.length === 0 &&
+      !isAfterOrderItemsFeature &&
+      (row.omzet > 0 || row.modal > 0);
+    const needsPostFeatureWarning =
+      normalizedOrderItems.length === 0 &&
+      isAfterOrderItemsFeature &&
+      (row.omzet > 0 || row.modal > 0);
+    const initialOrderItems = normalizedOrderItems.length
+      ? normalizedOrderItems
+      : needsLegacyFallback
+        ? [{ nama: "Item Lama", hargaJual: Math.max(0, row.omzet), modal: Math.max(0, row.modal), qty: 1 }]
+        : [{ nama: "", hargaJual: 0, modal: 0, qty: 1 }];
+    setEditRecapNotice(
+      needsLegacyFallback
+        ? "Detail item lama belum tersimpan. Sistem mengisi item awal dari total omzet/modal, silakan sesuaikan nama/qty/harga."
+        : needsPostFeatureWarning
+          ? "Item barang belum terbaca untuk data ini. Cek kembali data order_items pada transaksi tersebut."
+          : ""
+    );
+    const initialTotals = calcRecapOrderTotals(initialOrderItems);
     setEditRecapDraft({
       id: row.id,
       tanggal: row.tanggal,
@@ -2044,11 +2102,11 @@ export default function Page() {
       status: row.status,
       alasanCancel: row.alasanCancel,
       nominalCancel: Math.max(0, Number(row.nominalCancel) || 0),
-      orderItems: row.orderItems.length ? row.orderItems.map((item) => ({ ...item })) : [],
+      orderItems: initialOrderItems,
       noPesanan: row.noPesanan,
       pelanggan: row.pelanggan,
-      omzet: row.omzet,
-      modal: row.modal,
+      omzet: initialTotals.omzet,
+      modal: initialTotals.modal,
       catatan: row.catatan,
       biayaDetail: row.biayaDetail.length ? row.biayaDetail.map((item) => ({ ...item })) : [{ label: "Biaya", value: row.ongkir }]
     });
@@ -2074,6 +2132,51 @@ export default function Page() {
     setEditRecapDraft((prev) => (prev ? { ...prev, biayaDetail: [...prev.biayaDetail, { label: "", value: 0 }] } : prev));
   }
 
+  function updateEditRecapOrderItem(index: number, field: keyof RecapOrderSnapshot, value: string | number) {
+    setEditRecapDraft((prev) => {
+      if (!prev) return prev;
+      const next = prev.orderItems.map((item, idx) => {
+        if (idx !== index) return item;
+        if (field === "nama") return { ...item, nama: String(value) };
+        if (field === "qty") return { ...item, qty: Math.max(0, Number(value) || 0) };
+        if (field === "hargaJual") return { ...item, hargaJual: Math.max(0, Number(value) || 0) };
+        return { ...item, modal: Math.max(0, Number(value) || 0) };
+      });
+      const totals = calcRecapOrderTotals(next);
+      return {
+        ...prev,
+        orderItems: next,
+        omzet: totals.omzet,
+        modal: totals.modal
+      };
+    });
+  }
+
+  function addEditRecapOrderItem() {
+    setEditRecapDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        orderItems: [...prev.orderItems, { nama: "", hargaJual: 0, modal: 0, qty: 1 }]
+      };
+    });
+  }
+
+  function removeEditRecapOrderItem(index: number) {
+    setEditRecapDraft((prev) => {
+      if (!prev) return prev;
+      if (prev.orderItems.length <= 1) return prev;
+      const next = prev.orderItems.filter((_, idx) => idx !== index);
+      const totals = calcRecapOrderTotals(next);
+      return {
+        ...prev,
+        orderItems: next,
+        omzet: totals.omzet,
+        modal: totals.modal
+      };
+    });
+  }
+
   function removeEditRecapBiayaDetail(index: number) {
     setEditRecapDraft((prev) => {
       if (!prev) return prev;
@@ -2094,6 +2197,22 @@ export default function Page() {
       return;
     }
 
+    const sanitizedOrderItems = editRecapDraft.orderItems
+      .map((item) => ({
+        nama: item.nama.trim(),
+        hargaJual: Math.max(0, Number(item.hargaJual) || 0),
+        modal: Math.max(0, Number(item.modal) || 0),
+        qty: Math.max(0, Number(item.qty) || 0)
+      }))
+      .filter((item) => item.nama && item.qty > 0);
+
+    if (!sanitizedOrderItems.length) {
+      const message = "Isi minimal 1 item barang valid sebelum menyimpan perubahan.";
+      setRecapNotice(message);
+      setEditRecapNotice(message);
+      return;
+    }
+
     const sanitizedBiayaDetail = editRecapDraft.biayaDetail
       .map((item) => ({
         label: item.label.trim() || "Biaya",
@@ -2103,6 +2222,7 @@ export default function Page() {
 
     const biayaDetail = sanitizedBiayaDetail.length ? sanitizedBiayaDetail : [{ label: "Biaya", value: 0 }];
     const totalBiaya = biayaDetail.reduce((acc, item) => acc + item.value, 0);
+    const orderTotals = calcRecapOrderTotals(sanitizedOrderItems);
 
     const updatedRow: SalesRecapRow = {
       id: editRecapDraft.id,
@@ -2113,11 +2233,11 @@ export default function Page() {
       nominalCancel: editRecapDraft.status === "cancel" ? Math.max(0, Number(editRecapDraft.nominalCancel) || 0) : 0,
       tanggalCancel: editRecapDraft.status === "cancel" ? new Date().toISOString() : null,
       createdAt: recapRows.find((row) => row.id === editRecapDraft.id)?.createdAt ?? null,
-      orderItems: editRecapDraft.orderItems.length ? editRecapDraft.orderItems.map((item) => ({ ...item })) : [],
+      orderItems: sanitizedOrderItems,
       noPesanan: editRecapDraft.noPesanan,
       pelanggan: editRecapDraft.pelanggan,
-      omzet: Math.max(0, Number(editRecapDraft.omzet) || 0),
-      modal: Math.max(0, Number(editRecapDraft.modal) || 0),
+      omzet: orderTotals.omzet,
+      modal: orderTotals.modal,
       ongkir: totalBiaya,
       biayaDetail,
       catatan: editRecapDraft.catatan
@@ -2740,9 +2860,12 @@ export default function Page() {
       : "";
 
     const latestValue = values.length ? values[values.length - 1] : 0;
-    const previousValue = values.length > 1 ? values[values.length - 2] : latestValue;
+    const baselineValues = values.length > 1 ? values.slice(0, -1) : values;
+    const baselineAvg = baselineValues.length
+      ? baselineValues.reduce((acc, value) => acc + value, 0) / baselineValues.length
+      : 0;
     const deltaPct =
-      previousValue > 0 ? ((latestValue - previousValue) / previousValue) * 100 : latestValue > 0 ? 100 : 0;
+      baselineAvg > 0 ? ((latestValue - baselineAvg) / baselineAvg) * 100 : latestValue > 0 ? 100 : 0;
 
     return {
       width,
@@ -2753,6 +2876,7 @@ export default function Page() {
       areaPath,
       labels,
       latestValue,
+      baselineAvg,
       deltaPct,
       hasData: points.length > 0
     };
@@ -3511,6 +3635,7 @@ export default function Page() {
                   Realtime ON
                 </span>
                 <span
+                  title={`Perubahan omzet terbaru vs rata-rata periode: ${rupiah(recapLineChart.baselineAvg)}`}
                   className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
                     recapLineChart.deltaPct >= 0 ? "bg-sky-100 text-sky-700" : "bg-rose-100 text-rose-700"
                   }`}
@@ -4711,12 +4836,61 @@ export default function Page() {
                           </label>
                           <label className="grid gap-1 text-xs text-slate-600">
                             <span>Omzet (Rp)</span>
-                            <input type="number" min={0} value={editRecapDraft.omzet} onChange={(e) => updateEditRecapField("omzet", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                            <input type="number" min={0} value={editRecapDraft.omzet} readOnly className="w-full rounded-xl border border-stone-200 bg-stone-100 px-2.5 py-2 text-sm text-slate-800 outline-none" />
                           </label>
                           <label className="grid gap-1 text-xs text-slate-600">
                             <span>Modal (Rp)</span>
-                            <input type="number" min={0} value={editRecapDraft.modal} onChange={(e) => updateEditRecapField("modal", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                            <input type="number" min={0} value={editRecapDraft.modal} readOnly className="w-full rounded-xl border border-stone-200 bg-stone-100 px-2.5 py-2 text-sm text-slate-800 outline-none" />
                           </label>
+                        </div>
+                        <div className="mt-2 rounded-2xl border border-stone-200 bg-white/90 p-3">
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Item Barang</p>
+                            <button type="button" onClick={addEditRecapOrderItem} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                              Tambah Barang
+                            </button>
+                          </div>
+                          <div className="space-y-2">
+                            {editRecapDraft.orderItems.map((item, index) => (
+                              <div key={`edit-order-card-${index}`} className="grid gap-2 lg:grid-cols-[1.6fr_110px_130px_130px_auto]">
+                                <input
+                                  value={item.nama}
+                                  onChange={(e) => updateEditRecapOrderItem(index, "nama", e.target.value)}
+                                  placeholder="Nama barang"
+                                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                />
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={item.qty}
+                                  onChange={(e) => updateEditRecapOrderItem(index, "qty", Number(e.target.value || 0))}
+                                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                />
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={item.hargaJual}
+                                  onChange={(e) => updateEditRecapOrderItem(index, "hargaJual", Number(e.target.value || 0))}
+                                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                />
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={item.modal}
+                                  onChange={(e) => updateEditRecapOrderItem(index, "modal", Number(e.target.value || 0))}
+                                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeEditRecapOrderItem(index)}
+                                  className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={editRecapDraft.orderItems.length <= 1}
+                                >
+                                  Hapus
+                                </button>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                         <div className="mt-2 rounded-2xl border border-stone-200 bg-white/90 p-3">
                           <div className="mb-2 flex items-center justify-between">
@@ -4984,12 +5158,61 @@ export default function Page() {
                                   </label>
                                   <label className="grid gap-1 text-xs text-slate-600">
                                     <span>Omzet (Rp)</span>
-                                    <input type="number" min={0} value={editRecapDraft.omzet} onChange={(e) => updateEditRecapField("omzet", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                    <input type="number" min={0} value={editRecapDraft.omzet} readOnly className="w-full rounded-xl border border-stone-200 bg-stone-100 px-2.5 py-2 text-sm text-slate-800 outline-none" />
                                   </label>
                                   <label className="grid gap-1 text-xs text-slate-600">
                                     <span>Modal (Rp)</span>
-                                    <input type="number" min={0} value={editRecapDraft.modal} onChange={(e) => updateEditRecapField("modal", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                    <input type="number" min={0} value={editRecapDraft.modal} readOnly className="w-full rounded-xl border border-stone-200 bg-stone-100 px-2.5 py-2 text-sm text-slate-800 outline-none" />
                                   </label>
+                                </div>
+                                <div className="mt-2 rounded-2xl border border-stone-200 bg-white/90 p-3">
+                                  <div className="mb-2 flex items-center justify-between">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Item Barang</p>
+                                    <button type="button" onClick={addEditRecapOrderItem} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                                      Tambah Barang
+                                    </button>
+                                  </div>
+                                  <div className="space-y-2">
+                                    {editRecapDraft.orderItems.map((item, index) => (
+                                      <div key={`edit-order-table-${index}`} className="grid gap-2 lg:grid-cols-[1.6fr_110px_130px_130px_auto]">
+                                        <input
+                                          value={item.nama}
+                                          onChange={(e) => updateEditRecapOrderItem(index, "nama", e.target.value)}
+                                          placeholder="Nama barang"
+                                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                        />
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={item.qty}
+                                          onChange={(e) => updateEditRecapOrderItem(index, "qty", Number(e.target.value || 0))}
+                                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                        />
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={item.hargaJual}
+                                          onChange={(e) => updateEditRecapOrderItem(index, "hargaJual", Number(e.target.value || 0))}
+                                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                        />
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={item.modal}
+                                          onChange={(e) => updateEditRecapOrderItem(index, "modal", Number(e.target.value || 0))}
+                                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => removeEditRecapOrderItem(index)}
+                                          className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                          disabled={editRecapDraft.orderItems.length <= 1}
+                                        >
+                                          Hapus
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
                                 </div>
                                 <div className="mt-2 rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
                                   <div className="mb-2 flex items-center justify-between">
