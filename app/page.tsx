@@ -1886,6 +1886,10 @@ export default function Page() {
       setRecapNotice("Role viewer tidak punya izin mengubah data.");
       return;
     }
+    if (editRecapDraft?.id === row.id) {
+      setEditRecapDraft(null);
+      return;
+    }
     setOpenBiayaDetailRow(null);
     closeCancelDraft(true);
     setEditRecapDraft({
@@ -2162,6 +2166,10 @@ export default function Page() {
     return isCancelDraftOpenForRow(rowId)
       ? "cancel-inline-panel cancel-inline-panel-open"
       : "cancel-inline-panel cancel-inline-panel-close";
+  }
+
+  function isEditRecapOpenForRow(rowId: string) {
+    return editRecapDraft?.id === rowId;
   }
 
   function exportRecapPdf() {
@@ -4477,12 +4485,13 @@ export default function Page() {
             </div>
           </div>
 
-          <div className="mt-3 grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
+          <div className="hidden mt-3 grid gap-2 lg:grid-cols-2 2xl:grid-cols-3">
             {filteredRecapRows.length ? (
               filteredRecapRows.map((row) => {
                 const laba = row.omzet - row.modal - row.ongkir;
                 const labaFinalTransaksi = laba - row.nominalCancel;
                 const detailOpen = openBiayaDetailRow?.id === row.id;
+                const editOpen = isEditRecapOpenForRow(row.id);
                 return (
                   <div key={`recap-card-${row.id}`} className={row.status === "cancel" ? "rounded-2xl border border-rose-200 bg-rose-50/40 p-3" : "rounded-2xl border border-stone-200 bg-white p-3"}>
                     <div className="grid gap-1.5 text-sm sm:grid-cols-2">
@@ -4518,7 +4527,7 @@ export default function Page() {
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {canManageRecap ? (
                         <button type="button" onClick={() => openEditRecap(row)} className="whitespace-nowrap rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
-                          Edit
+                          {editOpen ? "Tutup Edit" : "Edit"}
                         </button>
                       ) : null}
                       {canManageRecap ? (
@@ -4598,6 +4607,102 @@ export default function Page() {
                         </div>
                       </div>
                     ) : null}
+                    {editOpen && editRecapDraft ? (
+                      <div className="mt-2 animate-sweep-in rounded-2xl border border-sky-200 bg-sky-50/50 p-3">
+                        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Edit Data Rekap</p>
+                        <div className="mt-2 grid gap-2 md:grid-cols-2">
+                          <label className="grid gap-1 text-xs text-slate-600">
+                            <span>Tanggal</span>
+                            <input type="date" value={editRecapDraft.tanggal} onChange={(e) => updateEditRecapField("tanggal", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                          </label>
+                          <label className="grid gap-1 text-xs text-slate-600">
+                            <span>Marketplace</span>
+                            <select value={editRecapDraft.marketplace} onChange={(e) => updateEditRecapField("marketplace", e.target.value as SalesRecapRow["marketplace"])} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                              <option value="Tokopedia">Tokopedia</option>
+                              <option value="Shopee">Shopee</option>
+                              <option value="TikTok">TikTok</option>
+                            </select>
+                          </label>
+                          <label className="grid gap-1 text-xs text-slate-600">
+                            <span>No Pesanan</span>
+                            <input value={editRecapDraft.noPesanan} onChange={(e) => updateEditRecapField("noPesanan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                          </label>
+                          <label className="grid gap-1 text-xs text-slate-600">
+                            <span>Pelanggan</span>
+                            <input value={editRecapDraft.pelanggan} onChange={(e) => updateEditRecapField("pelanggan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                          </label>
+                          <label className="grid gap-1 text-xs text-slate-600">
+                            <span>Omzet (Rp)</span>
+                            <input type="number" min={0} value={editRecapDraft.omzet} onChange={(e) => updateEditRecapField("omzet", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                          </label>
+                          <label className="grid gap-1 text-xs text-slate-600">
+                            <span>Modal (Rp)</span>
+                            <input type="number" min={0} value={editRecapDraft.modal} onChange={(e) => updateEditRecapField("modal", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                          </label>
+                        </div>
+                        <div className="mt-2 rounded-2xl border border-stone-200 bg-white/90 p-3">
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Rincian Biaya</p>
+                            <button type="button" onClick={addEditRecapBiayaDetail} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                              Tambah Biaya
+                            </button>
+                          </div>
+                          <div className="space-y-2">
+                            {editRecapDraft.biayaDetail.map((item, index) => (
+                              <div key={`edit-biaya-card-${index}`} className="grid gap-2 lg:grid-cols-[1.4fr_140px_auto]">
+                                <input
+                                  value={item.label}
+                                  onChange={(e) => updateEditRecapBiayaDetail(index, "label", e.target.value)}
+                                  placeholder="Nama biaya"
+                                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                />
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={item.value}
+                                  onChange={(e) => updateEditRecapBiayaDetail(index, "value", Number(e.target.value || 0))}
+                                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeEditRecapBiayaDetail(index)}
+                                  className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={editRecapDraft.biayaDetail.length <= 1}
+                                >
+                                  Hapus
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          <div className="mt-2 flex items-center justify-between text-sm">
+                            <span className="text-slate-600">Total Biaya</span>
+                            <strong className="text-slate-900">
+                              {rupiah(editRecapDraft.biayaDetail.reduce((acc, item) => acc + Math.max(0, Number(item.value) || 0), 0))}
+                            </strong>
+                          </div>
+                        </div>
+                        <label className="mt-2 grid gap-1 text-xs text-slate-600">
+                          <span>Catatan</span>
+                          <input value={editRecapDraft.catatan} onChange={(e) => updateEditRecapField("catatan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                        </label>
+                        <div className="mt-2 flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditRecapDraft(null)}
+                            className="rounded-xl border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                          >
+                            Batal
+                          </button>
+                          <button
+                            type="button"
+                            onClick={saveEditRecap}
+                            className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-slate-800"
+                          >
+                            Simpan Perubahan
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     {detailOpen ? (
                       <div className="mt-2 animate-sweep-in rounded-2xl border border-stone-200 bg-stone-50/70 p-3">
                         <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Detail Biaya</p>
@@ -4631,43 +4736,49 @@ export default function Page() {
             )}
           </div>
 
-          <div className="hidden mt-3 overflow-x-auto rounded-2xl border border-stone-200">
-            <table className="w-full text-sm">
+          <div className="mt-3 overflow-x-auto rounded-2xl border border-stone-200 bg-white">
+            <table className="w-full table-fixed text-sm">
               <thead className="bg-stone-50 text-slate-700">
                 <tr>
-                  <th className="px-3 py-2 text-left">Tanggal</th>
-                  <th className="px-3 py-2 text-left">Marketplace</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-left">No Pesanan</th>
-                  <th className="px-3 py-2 text-left">Pelanggan</th>
-                  <th className="px-3 py-2 text-right">Omzet</th>
-                  <th className="px-3 py-2 text-right">Modal</th>
-                  <th className="px-3 py-2 text-right">Biaya</th>
-                  <th className="px-3 py-2 text-right">Laba</th>
+                  <th className="w-[100px] px-3 py-2 text-left">Tanggal</th>
+                  <th className="w-[34%] px-3 py-2 text-left">Transaksi</th>
+                  <th className="w-[26%] px-3 py-2 text-left">Keuangan</th>
                   <th className="px-3 py-2 text-left">Catatan</th>
-                  <th className="min-w-[220px] px-3 py-2 text-center">Aksi</th>
+                  <th className="w-[220px] px-3 py-2 text-center">Aksi</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredRecapRows.length ? (
                   filteredRecapRows.map((row) => {
                     const laba = row.omzet - row.modal - row.ongkir;
+                    const labaFinal = laba - row.nominalCancel;
+                    const editOpen = isEditRecapOpenForRow(row.id);
                     return (
                       <Fragment key={row.id}>
                         <tr className={row.status === "cancel" ? "border-t border-stone-100 bg-rose-50/40" : "border-t border-stone-100"}>
-                          <td className="px-3 py-2">{row.tanggal}</td>
-                          <td className="px-3 py-2">{row.marketplace}</td>
-                          <td className="px-3 py-2">
-                            <span className={row.status === "cancel" ? "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700" : "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700"}>
-                              {row.status === "cancel" ? "Cancel" : "Sukses"}
-                            </span>
+                          <td className="px-3 py-2 align-top">
+                            <p className="font-medium text-slate-900">{row.tanggal}</p>
                           </td>
-                          <td className="break-all px-3 py-2">{row.noPesanan || "-"}</td>
-                          <td className="break-all px-3 py-2">{row.pelanggan || "-"}</td>
-                          <td className="px-3 py-2 text-right">{rupiah(row.omzet)}</td>
-                          <td className="px-3 py-2 text-right">{rupiah(row.modal)}</td>
-                          <td className="px-3 py-2 text-right">{rupiah(row.ongkir)}</td>
-                          <td className={laba >= 0 ? "px-3 py-2 text-right text-slate-900" : "px-3 py-2 text-right text-rose-600"}>{rupiah(laba)}</td>
+                          <td className="px-3 py-2 align-top">
+                            <p className="font-medium text-slate-900">{row.marketplace}</p>
+                            <p className="mt-0.5 break-all text-xs text-slate-600">No: {row.noPesanan || "-"}</p>
+                            <p className="mt-0.5 break-all text-xs text-slate-600">Pelanggan: {row.pelanggan || "-"}</p>
+                            <div className="mt-1">
+                              <span className={row.status === "cancel" ? "rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700" : "rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700"}>
+                                {row.status === "cancel" ? "Cancel" : "Sukses"}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <div className="space-y-0.5 text-xs text-slate-600">
+                              <p>Omzet: <strong className="text-slate-900">{rupiah(row.omzet)}</strong></p>
+                              <p>Modal: <strong className="text-slate-900">{rupiah(row.modal)}</strong></p>
+                              <p>Biaya: <strong className="text-slate-900">{rupiah(row.ongkir)}</strong></p>
+                              <p>Laba Sukses: <strong className={laba >= 0 ? "text-slate-900" : "text-rose-600"}>{rupiah(laba)}</strong></p>
+                              <p>Biaya Cancel: <strong className={row.nominalCancel > 0 ? "text-rose-700" : "text-slate-900"}>{rupiah(row.nominalCancel)}</strong></p>
+                              <p>Laba Final: <strong className={labaFinal >= 0 ? "text-slate-900" : "text-rose-600"}>{rupiah(labaFinal)}</strong></p>
+                            </div>
+                          </td>
                           <td className="break-words px-3 py-2">
                             {row.catatan || "-"}
                             {row.status === "cancel" ? (
@@ -4677,11 +4788,11 @@ export default function Page() {
                               </div>
                             ) : null}
                           </td>
-                          <td className="min-w-[220px] px-3 py-2 text-center">
+                          <td className="px-3 py-2 text-center align-top">
                             <div className="flex flex-wrap items-center justify-center gap-1.5">
                               {canManageRecap ? (
                                 <button type="button" onClick={() => openEditRecap(row)} className="whitespace-nowrap rounded-xl border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition hover:bg-sky-100">
-                                  Edit
+                                  {editOpen ? "Tutup Edit" : "Edit"}
                                 </button>
                               ) : null}
                               {canManageRecap ? (
@@ -4722,7 +4833,7 @@ export default function Page() {
                         </tr>
                         {isCancelDraftVisibleForRow(row.id) && row.status !== "cancel" ? (
                           <tr className="border-t border-stone-100 bg-rose-50/40">
-                            <td className="px-3 py-3" colSpan={11}>
+                            <td className="px-3 py-3" colSpan={5}>
                               <div className={`rounded-2xl border border-rose-200 bg-white p-3 ${getCancelDraftPanelClass(row.id)}`}>
                                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-rose-700">Input Cancel</p>
                                 <div className="mt-2 grid gap-2 lg:grid-cols-[1fr_220px_auto]">
@@ -4763,9 +4874,109 @@ export default function Page() {
                             </td>
                           </tr>
                         ) : null}
+                        {editOpen && editRecapDraft ? (
+                          <tr className="border-t border-stone-100 bg-sky-50/40">
+                            <td className="px-3 py-3" colSpan={5}>
+                              <div className="animate-sweep-in rounded-2xl border border-sky-200 bg-white p-3">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Edit Data Rekap</p>
+                                <div className="mt-2 grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+                                  <label className="grid gap-1 text-xs text-slate-600">
+                                    <span>Tanggal</span>
+                                    <input type="date" value={editRecapDraft.tanggal} onChange={(e) => updateEditRecapField("tanggal", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                  </label>
+                                  <label className="grid gap-1 text-xs text-slate-600">
+                                    <span>Marketplace</span>
+                                    <select value={editRecapDraft.marketplace} onChange={(e) => updateEditRecapField("marketplace", e.target.value as SalesRecapRow["marketplace"])} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                                      <option value="Tokopedia">Tokopedia</option>
+                                      <option value="Shopee">Shopee</option>
+                                      <option value="TikTok">TikTok</option>
+                                    </select>
+                                  </label>
+                                  <label className="grid gap-1 text-xs text-slate-600">
+                                    <span>No Pesanan</span>
+                                    <input value={editRecapDraft.noPesanan} onChange={(e) => updateEditRecapField("noPesanan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                  </label>
+                                  <label className="grid gap-1 text-xs text-slate-600">
+                                    <span>Pelanggan</span>
+                                    <input value={editRecapDraft.pelanggan} onChange={(e) => updateEditRecapField("pelanggan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                  </label>
+                                  <label className="grid gap-1 text-xs text-slate-600">
+                                    <span>Omzet (Rp)</span>
+                                    <input type="number" min={0} value={editRecapDraft.omzet} onChange={(e) => updateEditRecapField("omzet", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                  </label>
+                                  <label className="grid gap-1 text-xs text-slate-600">
+                                    <span>Modal (Rp)</span>
+                                    <input type="number" min={0} value={editRecapDraft.modal} onChange={(e) => updateEditRecapField("modal", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                  </label>
+                                </div>
+                                <div className="mt-2 rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
+                                  <div className="mb-2 flex items-center justify-between">
+                                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Rincian Biaya</p>
+                                    <button type="button" onClick={addEditRecapBiayaDetail} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
+                                      Tambah Biaya
+                                    </button>
+                                  </div>
+                                  <div className="space-y-2">
+                                    {editRecapDraft.biayaDetail.map((item, index) => (
+                                      <div key={`edit-biaya-table-${index}`} className="grid gap-2 lg:grid-cols-[1.4fr_140px_auto]">
+                                        <input
+                                          value={item.label}
+                                          onChange={(e) => updateEditRecapBiayaDetail(index, "label", e.target.value)}
+                                          placeholder="Nama biaya"
+                                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                        />
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={item.value}
+                                          onChange={(e) => updateEditRecapBiayaDetail(index, "value", Number(e.target.value || 0))}
+                                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => removeEditRecapBiayaDetail(index)}
+                                          className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                          disabled={editRecapDraft.biayaDetail.length <= 1}
+                                        >
+                                          Hapus
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div className="mt-2 flex items-center justify-between text-sm">
+                                    <span className="text-slate-600">Total Biaya</span>
+                                    <strong className="text-slate-900">
+                                      {rupiah(editRecapDraft.biayaDetail.reduce((acc, item) => acc + Math.max(0, Number(item.value) || 0), 0))}
+                                    </strong>
+                                  </div>
+                                </div>
+                                <label className="mt-2 grid gap-1 text-xs text-slate-600">
+                                  <span>Catatan</span>
+                                  <input value={editRecapDraft.catatan} onChange={(e) => updateEditRecapField("catatan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+                                </label>
+                                <div className="mt-2 flex items-center justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditRecapDraft(null)}
+                                    className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                                  >
+                                    Batal
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={saveEditRecap}
+                                    className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-800"
+                                  >
+                                    Simpan Perubahan
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
                         {openBiayaDetailRow?.id === row.id ? (
                           <tr className="border-t border-stone-100 bg-stone-50/60">
-                            <td className="px-3 py-3" colSpan={11}>
+                            <td className="px-3 py-3" colSpan={5}>
                               <div className="animate-sweep-in rounded-2xl border border-stone-200 bg-white p-3">
                                 <div className="mb-2 flex items-start justify-between gap-2 border-b border-stone-200 pb-2">
                                   <div>
@@ -4809,7 +5020,7 @@ export default function Page() {
                   })
                 ) : (
                   <tr>
-                    <td className="px-3 py-4 text-center text-slate-500" colSpan={11}>
+                    <td className="px-3 py-4 text-center text-slate-500" colSpan={5}>
                       Belum ada data rekap.
                     </td>
                   </tr>
@@ -4818,117 +5029,6 @@ export default function Page() {
             </table>
           </div>
 
-          {editRecapDraft ? (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/35 p-4">
-              <div className="w-full max-w-2xl rounded-2xl border border-stone-200 bg-white p-4 shadow-xl">
-                <div className="mb-3 flex items-center justify-between border-b border-stone-200 pb-2">
-                  <p className="text-sm font-semibold text-slate-900">Edit Data Rekap</p>
-                  <button
-                    type="button"
-                    onClick={() => setEditRecapDraft(null)}
-                    className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
-                  >
-                    Tutup
-                  </button>
-                </div>
-
-                <div className="grid gap-2 md:grid-cols-2">
-                  <label className="grid gap-1 text-xs text-slate-600">
-                    <span>Tanggal</span>
-                    <input type="date" value={editRecapDraft.tanggal} onChange={(e) => updateEditRecapField("tanggal", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                  </label>
-                  <label className="grid gap-1 text-xs text-slate-600">
-                    <span>Marketplace</span>
-                    <select value={editRecapDraft.marketplace} onChange={(e) => updateEditRecapField("marketplace", e.target.value as SalesRecapRow["marketplace"])} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
-                      <option value="Tokopedia">Tokopedia</option>
-                      <option value="Shopee">Shopee</option>
-                      <option value="TikTok">TikTok</option>
-                    </select>
-                  </label>
-                  <label className="grid gap-1 text-xs text-slate-600">
-                    <span>No Pesanan</span>
-                    <input value={editRecapDraft.noPesanan} onChange={(e) => updateEditRecapField("noPesanan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                  </label>
-                  <label className="grid gap-1 text-xs text-slate-600">
-                    <span>Pelanggan</span>
-                    <input value={editRecapDraft.pelanggan} onChange={(e) => updateEditRecapField("pelanggan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                  </label>
-                  <label className="grid gap-1 text-xs text-slate-600">
-                    <span>Omzet (Rp)</span>
-                    <input type="number" min={0} value={editRecapDraft.omzet} onChange={(e) => updateEditRecapField("omzet", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                  </label>
-                  <label className="grid gap-1 text-xs text-slate-600">
-                    <span>Modal (Rp)</span>
-                    <input type="number" min={0} value={editRecapDraft.modal} onChange={(e) => updateEditRecapField("modal", Number(e.target.value || 0))} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                  </label>
-                </div>
-
-                <div className="mt-3 rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
-                  <div className="mb-2 flex items-center justify-between">
-                    <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Rincian Biaya</p>
-                    <button type="button" onClick={addEditRecapBiayaDetail} className="rounded-xl border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100">
-                      Tambah Biaya
-                    </button>
-                  </div>
-                  <div className="space-y-2">
-                    {editRecapDraft.biayaDetail.map((item, index) => (
-                      <div key={`edit-biaya-${index}`} className="grid gap-2 lg:grid-cols-[1.4fr_140px_auto]">
-                        <input
-                          value={item.label}
-                          onChange={(e) => updateEditRecapBiayaDetail(index, "label", e.target.value)}
-                          placeholder="Nama biaya"
-                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
-                        />
-                        <input
-                          type="number"
-                          min={0}
-                          value={item.value}
-                          onChange={(e) => updateEditRecapBiayaDetail(index, "value", Number(e.target.value || 0))}
-                          className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-right text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeEditRecapBiayaDetail(index)}
-                          className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={editRecapDraft.biayaDetail.length <= 1}
-                        >
-                          Hapus
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-2 flex items-center justify-between text-sm">
-                    <span className="text-slate-600">Total Biaya</span>
-                    <strong className="text-slate-900">
-                      {rupiah(editRecapDraft.biayaDetail.reduce((acc, item) => acc + Math.max(0, Number(item.value) || 0), 0))}
-                    </strong>
-                  </div>
-                </div>
-
-                <label className="mt-3 grid gap-1 text-xs text-slate-600">
-                  <span>Catatan</span>
-                  <input value={editRecapDraft.catatan} onChange={(e) => updateEditRecapField("catatan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                </label>
-
-                <div className="mt-3 flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditRecapDraft(null)}
-                    className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="button"
-                    onClick={saveEditRecap}
-                    className="rounded-xl border border-stone-900 bg-slate-900 px-3 py-2 text-xs font-medium text-white transition hover:bg-slate-800"
-                  >
-                    Simpan Perubahan
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
           </div>
           ) : null}
         </article>
