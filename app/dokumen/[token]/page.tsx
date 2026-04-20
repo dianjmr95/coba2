@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from "../../../lib/supabaseAdmin";
 import AutoPrintTrigger from "./AutoPrintTrigger";
+import PrintActions from "./PrintActions";
 
 type DocumentItem = {
   nama: string;
@@ -122,25 +123,63 @@ export default async function DokumenPage({
   const items = normalizeItems(data.items);
   const isPenawaran = data.document_type === "penawaran";
   const docTitle = isPenawaran ? "SURAT PENAWARAN BARANG" : "FAKTUR PENJUALAN";
+  const docNoLabel = isPenawaran ? "No Penawaran" : "No Faktur";
+  const totalLabel = isPenawaran ? "TOTAL PENAWARAN" : "TOTAL";
   const total = Number(data.subtotal) || items.reduce((acc, item) => acc + item.qty * item.harga, 0);
 
   return (
     <main className="mx-auto min-h-screen max-w-4xl bg-white px-4 py-8 text-slate-900">
       <AutoPrintTrigger enabled={shouldAutoPrint} />
-      <section className="rounded-2xl border border-stone-200 p-4">
-        <div className="mb-4 border-b border-stone-200 pb-3">
-          <h1 className="text-xl font-bold">{docTitle}</h1>
-          <p className="text-sm text-slate-600">STARCOMP SOLO</p>
+      <PrintActions />
+      <section className="sheet rounded-md border border-stone-300 p-4 print:border-none print:p-0">
+        <style>{`
+          @media print {
+            @page { size: A4; margin: 12mm; }
+          }
+          .sheet .header { display: flex; gap: 10px; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
+          .sheet .logo { width: 90px; height: auto; object-fit: contain; }
+          .sheet .company h1 { margin: 0; font-size: 26px; letter-spacing: 0.02em; line-height: 1.02; }
+          .sheet .company p { margin: 1px 0 0; color: #222; font-size: 10px; }
+          .sheet .company .address { margin-top: 3px; font-size: 9px; line-height: 1.35; max-width: 430px; color: #333; }
+          .sheet .title { margin: 10px 0 8px; text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 0.11em; }
+          .sheet .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+          .sheet .box { border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 68px; }
+          .sheet .box p { margin: 0 0 3px; font-size: 10px; }
+          .sheet .doc-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+          .sheet .doc-table th, .sheet .doc-table td { border: 1px solid #999; padding: 5px; font-size: 10px; }
+          .sheet .doc-table th { background: #f2f2f2; font-weight: 700; }
+          .sheet .right { text-align: right; }
+          .sheet .total { margin-top: 8px; display: flex; justify-content: flex-end; font-size: 14px; font-weight: 700; }
+          .sheet .notes { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 42px; font-size: 10px; }
+          .sheet .terms { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.5; }
+          .sheet .terms-title { font-weight: 700; margin-bottom: 4px; }
+          .sheet .terms-list { margin: 0; padding-left: 16px; }
+          .sheet .terms-closing { margin-top: 8px; }
+          .sheet .sign { margin-top: 30px; display: flex; justify-content: flex-end; }
+          .sheet .sign-box { width: 160px; text-align: center; font-size: 10px; }
+          .sheet .sign-space { height: 52px; }
+        `}</style>
+
+        <div className="header">
+          <img src="/starcomp-logo.png" alt="Logo Starcomp" className="logo" />
+          <div className="company">
+            <h1>STARCOMP SOLO</h1>
+            <p>Computer Store</p>
+            <p>{isPenawaran ? "Dokumen Penawaran Barang" : "Faktur Penjualan Resmi"}</p>
+            <p className="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+          </div>
         </div>
 
-        <div className="mb-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-xl border border-stone-200 p-3 text-sm">
-            <p><strong>No Dokumen:</strong> {data.document_no}</p>
-            <p><strong>Tanggal:</strong> {formatDate(data.invoice_date)}</p>
+        <h2 className="title">{docTitle}</h2>
+
+        <div className="meta">
+          <div className="box">
+            <p><strong>{docNoLabel}:</strong> {data.document_no}</p>
+            <p><strong>Tanggal Cetak:</strong> {formatDate(data.invoice_date)}</p>
             {isPenawaran ? <p><strong>Berlaku Sampai:</strong> {formatDate(data.valid_until)}</p> : null}
             <p><strong>Kurir:</strong> {data.courier || "-"}</p>
           </div>
-          <div className="rounded-xl border border-stone-200 p-3 text-sm">
+          <div className="box">
             <p><strong>Pembeli:</strong> {data.buyer || "-"}</p>
             <p><strong>Telepon:</strong> {data.phone || "-"}</p>
             <p><strong>Alamat:</strong> {data.address || "-"}</p>
@@ -148,15 +187,15 @@ export default async function DokumenPage({
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-stone-200">
-          <table className="w-full border-collapse text-sm">
+        <div className="overflow-x-auto">
+          <table className="doc-table">
             <thead>
-              <tr className="bg-stone-50">
-                <th className="border border-stone-200 px-2 py-2 text-left">No</th>
-                <th className="border border-stone-200 px-2 py-2 text-left">Nama Barang</th>
-                <th className="border border-stone-200 px-2 py-2 text-right">Qty</th>
-                <th className="border border-stone-200 px-2 py-2 text-right">Harga</th>
-                <th className="border border-stone-200 px-2 py-2 text-right">Jumlah</th>
+              <tr>
+                <th style={{ width: 36 }}>No</th>
+                <th>Nama Barang</th>
+                <th className="right" style={{ width: 56 }}>Qty</th>
+                <th className="right" style={{ width: 130 }}>Harga Satuan</th>
+                <th className="right" style={{ width: 138 }}>Jumlah</th>
               </tr>
             </thead>
             <tbody>
@@ -165,17 +204,17 @@ export default async function DokumenPage({
                   const lineTotal = item.qty * item.harga;
                   return (
                     <tr key={`${item.nama}-${index}`}>
-                      <td className="border border-stone-200 px-2 py-2">{index + 1}</td>
-                      <td className="border border-stone-200 px-2 py-2">{item.nama}</td>
-                      <td className="border border-stone-200 px-2 py-2 text-right">{item.qty}</td>
-                      <td className="border border-stone-200 px-2 py-2 text-right">{rupiah(item.harga)}</td>
-                      <td className="border border-stone-200 px-2 py-2 text-right">{rupiah(lineTotal)}</td>
+                      <td>{index + 1}</td>
+                      <td>{item.nama}</td>
+                      <td className="right">{item.qty}</td>
+                      <td className="right">{rupiah(item.harga)}</td>
+                      <td className="right">{rupiah(lineTotal)}</td>
                     </tr>
                   );
                 })
               ) : (
                 <tr>
-                  <td colSpan={5} className="border border-stone-200 px-2 py-4 text-center text-slate-500">
+                  <td colSpan={5} className="text-center text-slate-500">
                     Tidak ada item.
                   </td>
                 </tr>
@@ -184,11 +223,38 @@ export default async function DokumenPage({
           </table>
         </div>
 
-        <div className="mt-3 text-right text-base font-bold">
-          {isPenawaran ? "TOTAL PENAWARAN" : "TOTAL"}: {rupiah(total)}
+        <div className="total">
+          {totalLabel}: {rupiah(total)}
         </div>
-        <div className="mt-3 rounded-xl border border-stone-200 p-3 text-sm">
+        <div className="notes">
           <strong>Catatan:</strong> {data.notes || "-"}
+        </div>
+        {!isPenawaran ? (
+          <div className="terms">
+            <div>Barang yang sudah dibeli tidak bisa dikembalikan.</div>
+            <div className="terms-closing">Terima kasih atas kepercayaan Anda.</div>
+          </div>
+        ) : null}
+        {isPenawaran ? (
+          <div className="terms">
+            <div className="terms-title">Syarat dan Ketentuan:</div>
+            <ol className="terms-list">
+              <li>Harga di atas sudah termasuk PPN 11%.</li>
+              <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
+              <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>
+              <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
+            </ol>
+            <div className="terms-closing">
+              Demikian surat penawaran ini kami sampaikan. Atas perhatian dan kerjasamanya, kami ucapkan terima kasih.
+            </div>
+          </div>
+        ) : null}
+        <div className="sign">
+          <div className="sign-box">
+            <div>Hormat kami,</div>
+            <div className="sign-space" />
+            <div><strong>STARCOMP SOLO</strong></div>
+          </div>
         </div>
       </section>
     </main>

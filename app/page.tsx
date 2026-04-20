@@ -966,6 +966,8 @@ export default function Page() {
   const [invoiceHistoryStartDate, setInvoiceHistoryStartDate] = useState("");
   const [invoiceHistoryEndDate, setInvoiceHistoryEndDate] = useState("");
   const [invoiceHistoryBuyerQuery, setInvoiceHistoryBuyerQuery] = useState("");
+  const [invoiceHistoryPage, setInvoiceHistoryPage] = useState(1);
+  const [invoiceHistoryPageSize, setInvoiceHistoryPageSize] = useState<10 | 25 | 50>(10);
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([
     { id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }
   ]);
@@ -1665,6 +1667,21 @@ export default function Page() {
     invoiceHistoryStartDate,
     invoiceHistoryTypeFilter
   ]);
+  const invoiceHistoryTotalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(filteredInvoiceHistory.length / invoiceHistoryPageSize));
+  }, [filteredInvoiceHistory.length, invoiceHistoryPageSize]);
+  const paginatedInvoiceHistory = useMemo(() => {
+    const start = (invoiceHistoryPage - 1) * invoiceHistoryPageSize;
+    return filteredInvoiceHistory.slice(start, start + invoiceHistoryPageSize);
+  }, [filteredInvoiceHistory, invoiceHistoryPage, invoiceHistoryPageSize]);
+
+  useEffect(() => {
+    setInvoiceHistoryPage(1);
+  }, [invoiceHistoryTypeFilter, invoiceHistoryStartDate, invoiceHistoryEndDate, invoiceHistoryBuyerQuery, invoiceHistoryPageSize]);
+
+  useEffect(() => {
+    setInvoiceHistoryPage((prev) => Math.min(Math.max(prev, 1), invoiceHistoryTotalPages));
+  }, [invoiceHistoryTotalPages]);
 
   function createDocumentPublicToken() {
     if (typeof globalThis !== "undefined" && globalThis.crypto && "randomUUID" in globalThis.crypto) {
@@ -1784,90 +1801,121 @@ export default function Page() {
       : "-";
 
     const docLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
+    const docNoLabel = invoiceDocType === "faktur" ? "No Faktur" : "No Penawaran";
+    const totalLabel = invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN";
     const html = `<!doctype html>
     <html>
       <head>
         <meta charset="utf-8" />
         <title>${docLabel} ${generatedInvoiceNo}</title>
         <style>
-          @page { size: A4; margin: 20mm; }
-          body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 12px; }
-          .header { display: flex; gap: 14px; align-items: center; border-bottom: 2px solid #111; padding-bottom: 12px; margin-bottom: 14px; }
-          .logo { width: 120px; height: auto; object-fit: contain; }
-          .company h1 { margin: 0; font-size: 20px; letter-spacing: 0.02em; }
-          .company p { margin: 3px 0 0; color: #333; font-size: 12px; }
-          .title { margin: 14px 0 10px; text-align: center; font-size: 16px; font-weight: 700; letter-spacing: 0.08em; }
-          .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin-bottom: 12px; }
-          .box { border: 1px solid #bbb; padding: 10px; border-radius: 4px; }
-          .box p { margin: 0 0 4px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-          th, td { border: 1px solid #bbb; padding: 7px; }
-          th { background: #f3f3f3; font-weight: 700; }
+          @page { size: A4; margin: 12mm; }
+          body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 11px; }
+          .sheet { max-width: 760px; margin: 0 auto; }
+          .header { display: flex; gap: 10px; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
+          .logo { width: 90px; height: auto; object-fit: contain; }
+          .company h1 { margin: 0; font-size: 26px; letter-spacing: 0.02em; line-height: 1.02; }
+          .company p { margin: 1px 0 0; color: #222; font-size: 10px; }
+          .company .address { margin-top: 3px; font-size: 9px; line-height: 1.35; max-width: 430px; color: #333; }
+          .title { margin: 10px 0 8px; text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 0.11em; }
+          .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+          .box { border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 68px; }
+          .box p { margin: 0 0 3px; font-size: 10px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+          th, td { border: 1px solid #999; padding: 5px; font-size: 10px; }
+          th { background: #f2f2f2; font-weight: 700; }
           td.right, th.right { text-align: right; }
-          .total { margin-top: 10px; display: flex; justify-content: flex-end; font-size: 14px; font-weight: 700; }
-          .notes { margin-top: 12px; border: 1px solid #bbb; border-radius: 4px; padding: 10px; min-height: 52px; }
-          .sign { margin-top: 34px; display: flex; justify-content: flex-end; }
-          .sign-box { width: 220px; text-align: center; }
-          .sign-space { height: 58px; }
+          .total { margin-top: 8px; display: flex; justify-content: flex-end; font-size: 14px; font-weight: 700; }
+          .notes { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 42px; font-size: 10px; }
+          .terms { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.5; }
+          .terms-title { font-weight: 700; margin-bottom: 4px; }
+          .terms-list { margin: 0; padding-left: 16px; }
+          .terms-closing { margin-top: 8px; }
+          .sign { margin-top: 30px; display: flex; justify-content: flex-end; }
+          .sign-box { width: 160px; text-align: center; font-size: 10px; }
+          .sign-space { height: 52px; }
         </style>
       </head>
       <body>
-        <div class="header">
-          <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
-          <div class="company">
-            <h1>STARCOMP SOLO</h1>
-            <p>Computer Store</p>
-            <p>${invoiceDocType === "faktur" ? "Faktur Penjualan Resmi" : "Dokumen Penawaran Barang"}</p>
+        <div class="sheet">
+          <div class="header">
+            <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
+            <div class="company">
+              <h1>STARCOMP SOLO</h1>
+              <p>Computer Store</p>
+              <p>${invoiceDocType === "faktur" ? "Faktur Penjualan Resmi" : "Dokumen Penawaran Barang"}</p>
+              <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+            </div>
           </div>
-        </div>
 
-        <div class="title">${invoiceDocUpperLabel}</div>
+          <div class="title">${invoiceDocUpperLabel}</div>
 
-        <div class="meta">
-          <div class="box">
-            <p><strong>No ${docLabel}:</strong> ${generatedInvoiceNo}</p>
-            <p><strong>Tanggal Cetak:</strong> ${printDate}</p>
-            ${
-              invoiceDocType === "penawaran"
-                ? `<p><strong>Berlaku Sampai:</strong> ${validUntilDate}</p>`
-                : ""
-            }
-            <p><strong>Kurir:</strong> ${invoiceCourier || "-"}</p>
+          <div class="meta">
+            <div class="box">
+              <p><strong>${docNoLabel}:</strong> ${generatedInvoiceNo}</p>
+              <p><strong>Tanggal Cetak:</strong> ${printDate}</p>
+              ${
+                invoiceDocType === "penawaran"
+                  ? `<p><strong>Berlaku Sampai:</strong> ${validUntilDate}</p>`
+                  : ""
+              }
+              <p><strong>Kurir:</strong> ${invoiceCourier || "-"}</p>
+            </div>
+            <div class="box">
+              <p><strong>Pembeli:</strong> ${invoiceBuyer || "-"}</p>
+              <p><strong>Telepon:</strong> ${invoicePhone || "-"}</p>
+              <p><strong>Alamat:</strong> ${invoiceAddress || "-"}</p>
+              ${
+                invoiceDocType === "penawaran"
+                  ? `<p><strong>PIC Sales:</strong> ${invoiceSalesPic || "-"}</p>`
+                  : ""
+              }
+            </div>
           </div>
-          <div class="box">
-            <p><strong>Pembeli:</strong> ${invoiceBuyer || "-"}</p>
-            <p><strong>Telepon:</strong> ${invoicePhone || "-"}</p>
-            <p><strong>Alamat:</strong> ${invoiceAddress || "-"}</p>
-            ${
-              invoiceDocType === "penawaran"
-                ? `<p><strong>PIC Sales:</strong> ${invoiceSalesPic || "-"}</p>`
-                : ""
-            }
-          </div>
-        </div>
 
-        <table>
-          <thead>
-            <tr>
-              <th style="width:40px;">No</th>
-              <th>Nama Barang</th>
-              <th class="right" style="width:60px;">Qty</th>
-              <th class="right" style="width:140px;">Harga Satuan</th>
-              <th class="right" style="width:150px;">Jumlah</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>
+          <table>
+            <thead>
+              <tr>
+                <th style="width:36px;">No</th>
+                <th>Nama Barang</th>
+                <th class="right" style="width:56px;">Qty</th>
+                <th class="right" style="width:130px;">Harga Satuan</th>
+                <th class="right" style="width:138px;">Jumlah</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
 
-        <div class="total">${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceSubtotal)}</div>
-        <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
-        <div class="notes"><strong>Link Dokumen:</strong> ${savedDoc.shareUrl}</div>
-
-        <div class="sign">
-          <div class="sign-box">
-            <div>Hormat kami,</div>
-            <div class="sign-space"></div>
-            <div><strong>STARCOMP SOLO</strong></div>
+          <div class="total">${totalLabel}: ${rupiah(invoiceSubtotal)}</div>
+          <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
+          ${
+            invoiceDocType === "faktur"
+              ? `<div class="terms">
+                  <div>Barang yang sudah dibeli tidak bisa dikembalikan.</div>
+                  <div class="terms-closing">Terima kasih atas kepercayaan Anda.</div>
+                </div>`
+              : ""
+          }
+          ${
+            invoiceDocType === "penawaran"
+              ? `<div class="terms">
+                  <div class="terms-title">Syarat dan Ketentuan:</div>
+                  <ol class="terms-list">
+                    <li>Harga di atas sudah termasuk PPN 11%.</li>
+                    <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
+                    <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>
+                    <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
+                  </ol>
+                  <div class="terms-closing">Demikian surat penawaran ini kami sampaikan. Atas perhatian dan kerjasamanya, kami ucapkan terima kasih.</div>
+                </div>`
+              : ""
+          }
+          <div class="sign">
+            <div class="sign-box">
+              <div>Hormat kami,</div>
+              <div class="sign-space"></div>
+              <div><strong>STARCOMP SOLO</strong></div>
+            </div>
           </div>
         </div>
 
@@ -1985,6 +2033,74 @@ export default function Page() {
       return;
     }
     await copyDocumentLinkByToken(invoicePublicToken);
+  }
+
+  function exportInvoiceHistoryToExcel() {
+    const rows = filteredInvoiceHistory;
+    if (!rows.length) {
+      setInvoiceSaveNotice("Tidak ada data riwayat untuk diexport.");
+      return;
+    }
+
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+
+    const tableRows = rows
+      .map((row, index) => {
+        const docType = row.documentType === "faktur" ? "Faktur" : "Penawaran";
+        const shareUrl = `${window.location.origin}/dokumen/${row.publicToken}`;
+        return `<tr>
+          <td>${index + 1}</td>
+          <td>${escapeHtml(row.invoiceDate)}</td>
+          <td>${escapeHtml(docType)}</td>
+          <td>${escapeHtml(row.documentNo)}</td>
+          <td>${escapeHtml(row.buyer || "-")}</td>
+          <td style="mso-number-format:'\\#\\,\\#\\#0';">${Math.round(row.subtotal)}</td>
+          <td>${escapeHtml(shareUrl)}</td>
+        </tr>`;
+      })
+      .join("");
+
+    const html = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+</head>
+<body>
+  <table border="1">
+    <thead>
+      <tr>
+        <th>No</th>
+        <th>Tanggal</th>
+        <th>Jenis</th>
+        <th>No Dokumen</th>
+        <th>Pembeli</th>
+        <th>Subtotal</th>
+        <th>Link Dokumen</th>
+      </tr>
+    </thead>
+    <tbody>${tableRows}</tbody>
+  </table>
+</body>
+</html>`;
+
+    const blob = new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const dateLabel = new Date().toISOString().slice(0, 10);
+    const fileName = `riwayat-dokumen-${dateLabel}.xls`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setInvoiceSaveNotice(`Export Excel berhasil: ${fileName}`);
   }
 
   async function loadInvoiceHistoryDocumentToForm(publicToken: string) {
@@ -4783,14 +4899,24 @@ export default function Page() {
               <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-3">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-semibold text-slate-700">Riwayat Dokumen Tersimpan</p>
-                  <button
-                    type="button"
-                    onClick={() => void loadInvoiceHistory()}
-                    className="rounded-xl border border-stone-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
-                    disabled={invoiceHistoryLoading}
-                  >
-                    {invoiceHistoryLoading ? "Memuat..." : "Refresh"}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={exportInvoiceHistoryToExcel}
+                      disabled={!filteredInvoiceHistory.length}
+                      className="rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Export Excel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void loadInvoiceHistory()}
+                      className="rounded-xl border border-stone-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                      disabled={invoiceHistoryLoading}
+                    >
+                      {invoiceHistoryLoading ? "Memuat..." : "Refresh"}
+                    </button>
+                  </div>
                 </div>
                 <div className="mb-2 grid gap-2 md:grid-cols-4">
                   <label className="grid gap-1 text-xs text-slate-600">
@@ -4836,6 +4962,18 @@ export default function Page() {
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
                   <span>Total data: {invoiceHistoryRows.length}</span>
                   <span>Hasil filter: {filteredInvoiceHistory.length}</span>
+                  <label className="flex items-center gap-1">
+                    <span>Per Halaman</span>
+                    <select
+                      value={invoiceHistoryPageSize}
+                      onChange={(e) => setInvoiceHistoryPageSize(Number(e.target.value) as 10 | 25 | 50)}
+                      className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                  </label>
                 </div>
                 {invoiceHistoryNotice ? (
                   <p className="mb-2 rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-slate-600">
@@ -4855,8 +4993,8 @@ export default function Page() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredInvoiceHistory.length ? (
-                        filteredInvoiceHistory.map((row) => (
+                      {paginatedInvoiceHistory.length ? (
+                        paginatedInvoiceHistory.map((row) => (
                           <tr key={row.id} className="border-t border-stone-100">
                             <td className="px-2 py-2 text-slate-700">{row.invoiceDate}</td>
                             <td className="px-2 py-2">
@@ -4932,6 +5070,29 @@ export default function Page() {
                       )}
                     </tbody>
                   </table>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                  <span>
+                    Halaman {invoiceHistoryPage} dari {invoiceHistoryTotalPages}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setInvoiceHistoryPage((prev) => Math.max(1, prev - 1))}
+                      disabled={invoiceHistoryPage <= 1}
+                      className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Sebelumnya
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInvoiceHistoryPage((prev) => Math.min(invoiceHistoryTotalPages, prev + 1))}
+                      disabled={invoiceHistoryPage >= invoiceHistoryTotalPages}
+                      className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Berikutnya
+                    </button>
+                  </div>
                 </div>
               </div>
           </div>
