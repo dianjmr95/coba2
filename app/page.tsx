@@ -102,6 +102,19 @@ type HealthCheckResult = {
   userRoles: { ok: boolean; message: string };
 };
 
+type PriceFetchTarget = "harga_jual" | "modal";
+
+type ScrapeApiResponse = {
+  ok: boolean;
+  error?: string;
+  data?: {
+    price?: number;
+    store_name?: string;
+    marketplace?: string;
+    scraped_via?: "http" | "playwright" | "proxy";
+  };
+};
+
 type SalesRecapRow = {
   id: string;
   tanggal: string;
@@ -128,6 +141,7 @@ const NAV_VISIBILITY_STORAGE_KEY = "starcomp-nav-hidden-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
 const PRESET_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_PRESET_TABLE || "potongan_presets";
 const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
+const ENABLE_AUTO_PRICE_FETCH = String(process.env.NEXT_PUBLIC_ENABLE_AUTO_PRICE_FETCH || "").toLowerCase() === "true";
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
 const SECTION_LABEL: Record<SectionId, string> = {
   "kalkulator-potongan": "Kalkulator Potongan",
@@ -762,6 +776,10 @@ export default function Page() {
   const [harga, setHarga] = useState(0);
   const [modal, setModal] = useState(0);
   const [targetMargin, setTargetMargin] = useState(0);
+  const [priceSourceUrl, setPriceSourceUrl] = useState("");
+  const [priceFetchTarget, setPriceFetchTarget] = useState<PriceFetchTarget>("modal");
+  const [isPriceFetching, setIsPriceFetching] = useState(false);
+  const [priceFetchNotice, setPriceFetchNotice] = useState("");
 
   const [tokopediaFee, setTokopediaFee] = useState("4.75");
   const [shopeeFee, setShopeeFee] = useState("5.25");
@@ -1393,6 +1411,21 @@ export default function Page() {
     setInvoiceItems((prev) => (prev.length > 1 ? prev.filter((x) => x.id !== id) : prev));
   }
 
+  function resetInvoiceWithConfirmation() {
+    const confirmed = window.confirm("Yakin ingin menghapus nota/transaksi ini?");
+    if (!confirmed) return;
+
+    setInvoiceNo("");
+    setInvoiceDate(new Date().toISOString().slice(0, 10));
+    setInvoiceBuyer("");
+    setInvoicePhone("");
+    setInvoiceWhatsapp("");
+    setInvoiceCourier("");
+    setInvoiceAddress("");
+    setInvoiceNotes("");
+    setInvoiceItems([{ id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }]);
+  }
+
   function updateInvoiceItem(id: string, key: "nama" | "qty" | "harga", value: string | number) {
     setInvoiceItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, [key]: key === "nama" ? String(value) : Number(value) } : item))
@@ -1684,6 +1717,79 @@ export default function Page() {
     setRoleManageLoading(false);
   }
 
+  async function handleFetchPrice() {
+    const targetUrl = priceSourceUrl.trim();
+    if (!targetUrl) {
+      setPriceFetchNotice("Isi URL produk terlebih dahulu.");
+      return;
+    }
+
+    setIsPriceFetching(true);
+    setPriceFetchNotice("Mengambil harga otomatis...");
+
+    try {
+      const response = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: targetUrl })
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        const rawText = await response.text();
+        const preview = rawText.slice(0, 120).replace(/\s+/g, " ").trim();
+        setPriceFetchNotice(
+          `API mengembalikan respons non-JSON. Kemungkinan ada error server. Preview: ${preview || "-"}`
+        );
+        setIsPriceFetching(false);
+        return;
+      }
+
+      const payload = (await response.json()) as ScrapeApiResponse;
+      if (!response.ok || !payload.ok) {
+        const rawError = (payload.error || "Gagal mengambil harga dari URL produk.").trim();
+        const lowered = rawError.toLowerCase();
+        if (lowered.includes("anti-bot") || lowered.includes("captcha")) {
+          setPriceFetchNotice(
+            `${rawError} Kamu tetap bisa lanjut dengan isi Harga Jual/Modal manual untuk sementara.`
+          );
+        } else {
+          setPriceFetchNotice(rawError);
+        }
+        setIsPriceFetching(false);
+        return;
+      }
+
+      const fetchedPrice = Math.round(Math.max(0, Number(payload.data?.price) || 0));
+      if (!fetchedPrice) {
+        setPriceFetchNotice("Harga tidak ditemukan dari halaman produk.");
+        setIsPriceFetching(false);
+        return;
+      }
+
+      if (priceFetchTarget === "modal") {
+        setModal(fetchedPrice);
+      } else {
+        setHarga(fetchedPrice);
+      }
+
+      const labelTarget = priceFetchTarget === "modal" ? "Modal" : "Harga Jual";
+      const sourceLabel = payload.data?.store_name || payload.data?.marketplace || "website";
+      const viaLabel =
+        payload.data?.scraped_via === "playwright"
+          ? " (mode browser fallback)"
+          : payload.data?.scraped_via === "proxy"
+            ? " (mode anti-bot proxy)"
+            : "";
+      setPriceFetchNotice(`Harga dari ${sourceLabel} berhasil dimasukkan ke ${labelTarget}${viaLabel}.`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Terjadi kesalahan saat fetch harga.";
+      setPriceFetchNotice(message);
+    } finally {
+      setIsPriceFetching(false);
+    }
+  }
+
   async function runSupabaseHealthCheck() {
     if (healthCheckLoading) return;
 
@@ -1752,11 +1858,28 @@ export default function Page() {
     if (isRecapSaving) return false;
 
     setIsRecapSaving(true);
+    setRecapNotice("");
     setRecapSyncStatus("saving");
     setRecapSyncMessage("Menyimpan ke Supabase...");
 
     try {
       const komisiAfiliasiMarketplace = recapMarketplaceKomisiAfiliasiAktif ? recapMarketplaceKomisiAfiliasi : 0;
+      const normalizedOrderItems = recapOrderItems
+        .map((item) => ({
+          nama: item.nama.trim(),
+          hargaJual: Math.max(0, Number(item.hargaJual) || 0),
+          modal: Math.max(0, Number(item.modal) || 0),
+          qty: Math.max(0, Number(item.qty) || 0)
+        }))
+        .filter((item) => item.nama && item.hargaJual > 0 && item.qty > 0);
+
+      if (!normalizedOrderItems.length) {
+        setRecapSyncStatus("error");
+        setRecapSyncMessage("Data item belum lengkap.");
+        setRecapNotice("Isi minimal 1 item dengan Nama Barang dan Harga Jual sebelum simpan rekap.");
+        return false;
+      }
+
       const totalBiaya =
         recapMarketplace === "Shopee"
           ? recapShopeeTotalBiaya
@@ -1793,14 +1916,7 @@ export default function Page() {
         nominalCancel: 0,
         tanggalCancel: null,
         createdAt: new Date().toISOString(),
-        orderItems: recapOrderItems
-          .map((item) => ({
-            nama: item.nama.trim(),
-            hargaJual: Math.max(0, Number(item.hargaJual) || 0),
-            modal: Math.max(0, Number(item.modal) || 0),
-            qty: Math.max(0, Number(item.qty) || 0)
-          }))
-          .filter((item) => item.nama && item.qty > 0),
+        orderItems: normalizedOrderItems,
         noPesanan: recapNoPesanan,
         pelanggan: recapPelanggan,
         omzet: Math.max(0, recapOmzet),
@@ -1842,8 +1958,8 @@ export default function Page() {
         return next;
       });
       setRecapSyncStatus("success");
-      setRecapSyncMessage("Tersimpan ke Supabase.");
-      setRecapNotice("Data rekap berhasil disimpan ke Supabase.");
+      setRecapSyncMessage("Data sudah tersimpan.");
+      setRecapNotice("Data sudah tersimpan.");
       setRecapNoPesanan("");
       setRecapPelanggan("");
       setRecapOmzet(0);
@@ -1872,11 +1988,19 @@ export default function Page() {
     }
   }
 
-  async function deleteRecapRow(id: string) {
+  async function deleteRecapRow(row: SalesRecapRow) {
+    const { id } = row;
     if (authUser?.role !== "admin") {
       setRecapNotice("Hanya role admin yang bisa menghapus data rekap.");
       return;
     }
+    const noPesanan = row.noPesanan?.trim() || "-";
+    const pelanggan = row.pelanggan?.trim() || "-";
+    const confirmed = window.confirm(
+      `Yakin ingin menghapus transaksi rekap ini?\n\nTanggal: ${row.tanggal}\nMarketplace: ${row.marketplace}\nNo Pesanan: ${noPesanan}\nPelanggan: ${pelanggan}\n\nData yang dihapus tidak bisa dikembalikan.`
+    );
+    if (!confirmed) return;
+
     const { error } = await runSupabaseWithRetry(
       () => supabase.from(RECAP_SUPABASE_TABLE).delete().eq("id", id),
       2
@@ -2705,103 +2829,6 @@ export default function Page() {
       nominalDeltaPct
     };
   }, [recapRows, cancelTrendDays]);
-
-  const recapProductLeaderboard = useMemo(() => {
-    const productMap = new Map<
-      string,
-      {
-        nama: string;
-        qty: number;
-        omzet: number;
-        modal: number;
-        labaKotor: number;
-        cancelNominal: number;
-        transaksi: number;
-      }
-    >();
-
-    for (const row of filteredRecapRows) {
-      if (!row.orderItems.length) continue;
-      const totalOrderOmzet = row.orderItems.reduce(
-        (acc, item) => acc + Math.max(0, Number(item.hargaJual) || 0) * Math.max(0, Number(item.qty) || 0),
-        0
-      );
-      for (const item of row.orderItems) {
-        const key = item.nama.trim().toLowerCase();
-        if (!key) continue;
-        const qty = Math.max(0, Number(item.qty) || 0);
-        const omzet = Math.max(0, Number(item.hargaJual) || 0) * qty;
-        const modal = Math.max(0, Number(item.modal) || 0) * qty;
-        const labaKotor = omzet - modal;
-        const cancelNominal =
-          row.status === "cancel"
-            ? totalOrderOmzet > 0
-              ? (omzet / totalOrderOmzet) * row.nominalCancel
-              : row.nominalCancel / Math.max(1, row.orderItems.length)
-            : 0;
-        const prev = productMap.get(key) ?? {
-          nama: item.nama.trim(),
-          qty: 0,
-          omzet: 0,
-          modal: 0,
-          labaKotor: 0,
-          cancelNominal: 0,
-          transaksi: 0
-        };
-        productMap.set(key, {
-          nama: prev.nama,
-          qty: prev.qty + qty,
-          omzet: prev.omzet + omzet,
-          modal: prev.modal + modal,
-          labaKotor: prev.labaKotor + labaKotor,
-          cancelNominal: prev.cancelNominal + cancelNominal,
-          transaksi: prev.transaksi + 1
-        });
-      }
-    }
-
-    const items = Array.from(productMap.values()).map((item) => ({
-      ...item,
-      labaFinal: item.labaKotor - item.cancelNominal
-    }));
-
-    const topQty = [...items].sort((a, b) => b.qty - a.qty).slice(0, 8);
-    const topProfit = [...items].sort((a, b) => b.labaFinal - a.labaFinal).slice(0, 8);
-
-    return { hasData: items.length > 0, totalProduk: items.length, topQty, topProfit };
-  }, [filteredRecapRows]);
-
-  const recapBusyHourAnalysis = useMemo(() => {
-    const hourBuckets = new Map<number, { transaksi: number; sukses: number; cancel: number; omzet: number }>();
-
-    for (const row of filteredRecapRows) {
-      const source = row.createdAt ? new Date(row.createdAt) : new Date(`${row.tanggal}T00:00:00`);
-      if (Number.isNaN(source.getTime())) continue;
-      const hour = source.getHours();
-      const prev = hourBuckets.get(hour) ?? { transaksi: 0, sukses: 0, cancel: 0, omzet: 0 };
-      hourBuckets.set(hour, {
-        transaksi: prev.transaksi + 1,
-        sukses: prev.sukses + (row.status === "sukses" ? 1 : 0),
-        cancel: prev.cancel + (row.status === "cancel" ? 1 : 0),
-        omzet: prev.omzet + (row.status === "sukses" ? row.omzet : 0)
-      });
-    }
-
-    const hours = Array.from({ length: 24 }, (_, hour) => {
-      const base = hourBuckets.get(hour) ?? { transaksi: 0, sukses: 0, cancel: 0, omzet: 0 };
-      return { hour, ...base };
-    });
-    const activeHours = hours.filter((h) => h.transaksi > 0);
-    const topByTransaksi = [...activeHours].sort((a, b) => b.transaksi - a.transaksi)[0] ?? null;
-    const topByOmzet = [...activeHours].sort((a, b) => b.omzet - a.omzet)[0] ?? null;
-
-    return {
-      hasData: activeHours.length > 0,
-      activeHours,
-      topByTransaksi,
-      topByOmzet
-    };
-  }, [filteredRecapRows]);
 
   const recapRepeatBuyerCohort = useMemo(() => {
     const buyers = new Map<string, { buyer: string; transaksi: number; sukses: number; cancel: number; omzet: number; labaFinal: number }>();
@@ -3757,6 +3784,37 @@ export default function Page() {
             <NumberInput label="Harga Jual (Rp)" value={harga} onChange={setHarga} step={100} />
             <NumberInput label="Modal (Rp)" value={modal} onChange={setModal} step={100} />
             <NumberInput label="Target Margin (%)" value={targetMargin} onChange={setTargetMargin} step={0.1} />
+            {ENABLE_AUTO_PRICE_FETCH ? (
+              <div className="md:col-span-2 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Ambil Harga Otomatis</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-[1fr_150px_auto]">
+                  <input
+                    type="url"
+                    value={priceSourceUrl}
+                    onChange={(e) => setPriceSourceUrl(e.target.value)}
+                    placeholder="Tempel URL produk Tokopedia/Shopee/toko lain"
+                    className="w-full rounded-2xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  />
+                  <select
+                    value={priceFetchTarget}
+                    onChange={(e) => setPriceFetchTarget(e.target.value as PriceFetchTarget)}
+                    className="w-full rounded-2xl border border-stone-200 bg-white px-3 py-2.5 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="modal">Isi ke Modal</option>
+                    <option value="harga_jual">Isi ke Harga Jual</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleFetchPrice}
+                    disabled={isPriceFetching}
+                    className="rounded-2xl border border-sky-200 bg-sky-100 px-3 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {isPriceFetching ? "Fetching..." : "Fetch Price"}
+                  </button>
+                </div>
+                {priceFetchNotice ? <p className="mt-2 text-xs text-slate-600">{priceFetchNotice}</p> : null}
+              </div>
+            ) : null}
             <SelectInput label="Fee Tokopedia (%)" value={tokopediaFee} onChange={setTokopediaFee}>
               { ["4.75","6.25","7.5","7.75","8","9.5","10"].map((v)=> <option key={v} value={v}>{v}%</option>) }
             </SelectInput>
@@ -4025,17 +4083,7 @@ export default function Page() {
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setInvoiceNo("");
-                    setInvoiceDate(new Date().toISOString().slice(0, 10));
-                    setInvoiceBuyer("");
-                    setInvoicePhone("");
-                    setInvoiceWhatsapp("");
-                    setInvoiceCourier("");
-                    setInvoiceAddress("");
-                    setInvoiceNotes("");
-                    setInvoiceItems([{ id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }]);
-                  }}
+                  onClick={resetInvoiceWithConfirmation}
                   className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
                 >
                   Reset Nota
@@ -4317,10 +4365,12 @@ export default function Page() {
             <button
               type="button"
               disabled={isRecapSaving}
-              onClick={async () => { const ok = await addRecapRow(); if (ok) setRecapMenu("hasil"); }}
+              onClick={() => {
+                void addRecapRow();
+              }}
               className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {isRecapSaving ? "Menyimpan..." : "Tambah Rekap & Lihat Hasil"}
+              {isRecapSaving ? "Menyimpan..." : "Simpan Rekap"}
             </button>
           </div>
           {recapSyncStatus !== "idle" ? (
@@ -4462,78 +4512,6 @@ export default function Page() {
 
           <div className="mt-3 grid gap-2 xl:grid-cols-2">
             <div className="rounded-2xl border border-stone-200 bg-white p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Leaderboard Produk</p>
-              {recapProductLeaderboard.hasData ? (
-                <div className="mt-2 grid gap-2 lg:grid-cols-2">
-                  <div>
-                    <p className="text-xs font-medium text-slate-600">Top Produk (Qty)</p>
-                    <div className="mt-1 space-y-1">
-                      {recapProductLeaderboard.topQty.map((item, index) => (
-                        <div key={`lb-qty-${item.nama}-${index}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs">
-                          <p className="font-semibold text-slate-800">{index + 1}. {item.nama}</p>
-                          <p className="text-slate-600">Qty {item.qty} · Omzet {rupiah(item.omzet)}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-slate-600">Top Produk (Laba Final)</p>
-                    <div className="mt-1 space-y-1">
-                      {recapProductLeaderboard.topProfit.map((item, index) => (
-                        <div key={`lb-profit-${item.nama}-${index}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs">
-                          <p className="font-semibold text-slate-800">{index + 1}. {item.nama}</p>
-                          <p className={item.labaFinal >= 0 ? "text-slate-600" : "text-rose-700"}>
-                            Laba Final {rupiah(item.labaFinal)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-2 text-sm text-slate-500">Belum ada data produk. Simpan transaksi dengan item barang agar leaderboard terisi.</p>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-stone-200 bg-white p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Jam Ramai Transaksi</p>
-              {recapBusyHourAnalysis.hasData ? (
-                <div className="mt-2 space-y-2">
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
-                      Jam terpadat:{" "}
-                      <strong className="text-slate-900">
-                        {String(recapBusyHourAnalysis.topByTransaksi?.hour ?? 0).padStart(2, "0")}:00
-                      </strong>{" "}
-                      ({recapBusyHourAnalysis.topByTransaksi?.transaksi ?? 0} transaksi)
-                    </div>
-                    <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
-                      Jam omzet tertinggi:{" "}
-                      <strong className="text-slate-900">
-                        {String(recapBusyHourAnalysis.topByOmzet?.hour ?? 0).padStart(2, "0")}:00
-                      </strong>{" "}
-                      ({rupiah(recapBusyHourAnalysis.topByOmzet?.omzet ?? 0)})
-                    </div>
-                  </div>
-                  <div className="grid gap-1.5">
-                    {recapBusyHourAnalysis.activeHours
-                      .sort((a, b) => b.transaksi - a.transaksi)
-                      .slice(0, 8)
-                      .map((hour) => (
-                        <div key={`hour-${hour.hour}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
-                          <strong className="text-slate-900">{String(hour.hour).padStart(2, "0")}:00</strong> · {hour.transaksi} transaksi · {hour.cancel} cancel · Omzet {rupiah(hour.omzet)}
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-2 text-sm text-slate-500">Belum ada data waktu transaksi untuk dianalisa.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3 grid gap-2 xl:grid-cols-2">
-            <div className="rounded-2xl border border-stone-200 bg-white p-3">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Cohort Repeat Buyer</p>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-xs text-slate-600">
@@ -4659,7 +4637,7 @@ export default function Page() {
                         {detailOpen ? "Tutup Detail" : "Detail Biaya"}
                       </button>
                       {canDeleteRecap ? (
-                        <button type="button" onClick={() => deleteRecapRow(row.id)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                        <button type="button" onClick={() => deleteRecapRow(row)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
                           Hapus
                         </button>
                       ) : null}
@@ -4928,7 +4906,7 @@ export default function Page() {
                                 {openBiayaDetailRow?.id === row.id ? "Tutup Detail" : "Detail Biaya"}
                               </button>
                               {canDeleteRecap ? (
-                                <button type="button" onClick={() => deleteRecapRow(row.id)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
+                                <button type="button" onClick={() => deleteRecapRow(row)} className="whitespace-nowrap rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-medium text-rose-700 transition hover:bg-rose-100">
                                   Hapus
                                 </button>
                               ) : null}
