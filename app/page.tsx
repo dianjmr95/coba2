@@ -2009,6 +2009,14 @@ export default function Page() {
     return digits;
   }
 
+  function getDocumentShareUrl(publicToken: string) {
+    const params = new URLSearchParams({
+      includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
+      includeBank: invoiceIncludeBankAccount ? "1" : "0"
+    });
+    return `${window.location.origin}/dokumen/${publicToken}?${params.toString()}`;
+  }
+
   async function sendInvoiceToWhatsapp() {
     const target = normalizeWhatsappNumber(invoiceWhatsapp || invoicePhone);
     if (!target) {
@@ -2065,7 +2073,7 @@ export default function Page() {
       "",
       `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceSubtotal)}*`,
       `Catatan: ${invoiceNotes || "-"}`,
-      `Link dokumen: ${savedDoc.shareUrl}`
+      `Link dokumen: ${getDocumentShareUrl(savedDoc.publicToken)}`
     ].join("\n");
 
     const url = `https://wa.me/${target}?text=${encodeURIComponent(text)}`;
