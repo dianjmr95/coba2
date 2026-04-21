@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabaseClient";
 
@@ -50,7 +50,7 @@ type PresetItem = {
   data: PresetData;
 };
 
-type SectionId = "kalkulator-potongan" | "pembuatan-nota" | "rekap-penjualan";
+type SectionId = "kalkulator-potongan" | "compare-harga" | "pembuatan-nota" | "rekap-penjualan";
 type UserRole = "admin" | "staff" | "staff_offline" | "viewer";
 type InvoiceDocumentType = "faktur" | "penawaran";
 
@@ -158,6 +158,40 @@ type ScrapeApiResponse = {
     scraped_via?: "http" | "playwright" | "proxy";
   };
 };
+type PriceCompareStatus = "today_cheaper" | "previous_cheaper" | "same" | "unmatched";
+type PriceCompareRow = {
+  todayRowNumber: number;
+  todayProductName: string;
+  todayPrice: number;
+  matched: boolean;
+  previousProductName?: string;
+  previousPrice?: number;
+  difference?: number;
+  similarityScore: number;
+  status: PriceCompareStatus;
+};
+type PriceCompareApiResponse = {
+  ok: boolean;
+  error?: string;
+  data?: {
+    rows: PriceCompareRow[];
+    summary: PriceCompareSummary;
+  };
+};
+type PriceCompareSummary = {
+  totalRows: number;
+  matchedRows: number;
+  todayCheaperCount: number;
+  previousCheaperCount: number;
+  samePriceCount: number;
+};
+type PriceCompareItemCalc = {
+  targetNet: number;
+  rekomTokopedia: number;
+  rekomShopee: number;
+  rekomMall: number;
+};
+type CompareCalcMarketplace = "tokopedia" | "shopee" | "mall";
 type MyRoleApiResponse = {
   ok: boolean;
   error?: string;
@@ -186,6 +220,8 @@ type SalesRecapRow = {
 };
 
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
+const PRICE_COMPARE_PRESET_ACTIVE = "__active__";
+const PRICE_COMPARE_PRESET_AUTO_LAPTOP = "__auto_preset_laptop__";
 const INVOICE_COUNTER_STORAGE_KEY = "starcomp-invoice-counter-v1";
 const RECAP_CACHE_STORAGE_KEY = "sales-recap-cache-v1";
 const NAV_VISIBILITY_STORAGE_KEY = "starcomp-nav-hidden-v1";
@@ -198,14 +234,15 @@ const ENABLE_AUTO_PRICE_FETCH = String(process.env.NEXT_PUBLIC_ENABLE_AUTO_PRICE
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
 const SECTION_LABEL: Record<SectionId, string> = {
   "kalkulator-potongan": "Kalkulator Potongan",
+  "compare-harga": "Compare Harga",
   "pembuatan-nota": "Pembuatan Nota/Faktur",
   "rekap-penjualan": "Rekap Penjualan"
 };
 const ROLE_SECTION_ACCESS: Record<UserRole, SectionId[]> = {
-  admin: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
-  staff: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
-  staff_offline: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
-  viewer: ["kalkulator-potongan", "rekap-penjualan"]
+  admin: ["kalkulator-potongan", "compare-harga", "pembuatan-nota", "rekap-penjualan"],
+  staff: ["kalkulator-potongan", "compare-harga", "pembuatan-nota", "rekap-penjualan"],
+  staff_offline: ["kalkulator-potongan", "compare-harga", "pembuatan-nota", "rekap-penjualan"],
+  viewer: ["kalkulator-potongan", "compare-harga", "rekap-penjualan"]
 };
 const MARKETPLACE_VISUAL = {
   tokopedia: {
@@ -353,6 +390,12 @@ const toSafeNumber = (value: unknown) => {
     if (Number.isFinite(parsed)) return Math.max(0, parsed);
   }
   return 0;
+};
+const priceCompareStatusLabel: Record<PriceCompareStatus, string> = {
+  today_cheaper: "Hari Ini Lebih Murah",
+  previous_cheaper: "Sebelumnya Lebih Murah",
+  same: "Tidak Naik",
+  unmatched: "Tidak Match"
 };
 
 function calcRecapOrderTotals(items: RecapOrderSnapshot[]) {
@@ -835,6 +878,46 @@ function calcMall(
   return { total, net: harga - total, rincian };
 }
 
+function calcItemPriceFromPreset(modal: number, targetMargin: number, preset: PresetData): PriceCompareItemCalc {
+  if (modal <= 0) {
+    return { targetNet: 0, rekomTokopedia: 0, rekomShopee: 0, rekomMall: 0 };
+  }
+
+  const targetNet = modal * (1 + targetMargin / 100);
+  const rekomTokopedia = cariHargaRekomendasi(targetNet, (hargaJual) =>
+    calcTokopedia(
+      hargaJual,
+      Number(preset.tokopediaFee),
+      preset.tokopediaAfiliasiPct,
+      preset.tokopediaGratisOngkir,
+      preset.tokopediaAfiliasiAktif
+    ).net
+  );
+  const rekomShopee = cariHargaRekomendasi(targetNet, (hargaJual) =>
+    calcShopee(
+      hargaJual,
+      Number(preset.shopeeFee),
+      preset.shopeeAfiliasiPct,
+      preset.shopeeGratisOngkir,
+      preset.shopeePromo,
+      preset.shopeeAsuransi,
+      preset.shopeeAfiliasiAktif
+    ).net
+  );
+  const rekomMall = cariHargaRekomendasi(targetNet, (hargaJual) =>
+    calcMall(
+      hargaJual,
+      Number(preset.mallFee),
+      preset.mallAfiliasiPct,
+      preset.mallBiayaJasa,
+      preset.mallGratisOngkir,
+      preset.mallAfiliasiAktif
+    ).net
+  );
+
+  return { targetNet, rekomTokopedia, rekomShopee, rekomMall };
+}
+
 function NumberInput({
   label,
   value,
@@ -911,11 +994,29 @@ function ToggleRow({
 export default function Page() {
   const [harga, setHarga] = useState(0);
   const [modal, setModal] = useState(0);
-  const [targetMargin, setTargetMargin] = useState(0);
+  const [targetMargin, setTargetMargin] = useState(5);
   const [priceSourceUrl, setPriceSourceUrl] = useState("");
   const [priceFetchTarget, setPriceFetchTarget] = useState<PriceFetchTarget>("modal");
   const [isPriceFetching, setIsPriceFetching] = useState(false);
   const [priceFetchNotice, setPriceFetchNotice] = useState("");
+  const [todayPriceListFile, setTodayPriceListFile] = useState<File | null>(null);
+  const [previousPriceListFile, setPreviousPriceListFile] = useState<File | null>(null);
+  const [isTodayPriceListDragOver, setIsTodayPriceListDragOver] = useState(false);
+  const [isPreviousPriceListDragOver, setIsPreviousPriceListDragOver] = useState(false);
+  const [isPriceCompareLoading, setIsPriceCompareLoading] = useState(false);
+  const [isPriceCompareExporting, setIsPriceCompareExporting] = useState(false);
+  const [priceCompareRows, setPriceCompareRows] = useState<PriceCompareRow[]>([]);
+  const [priceCompareNotice, setPriceCompareNotice] = useState("");
+  const [priceCompareSummary, setPriceCompareSummary] = useState<PriceCompareSummary | null>(null);
+  const [priceComparePresetId, setPriceComparePresetId] = useState<string>(PRICE_COMPARE_PRESET_AUTO_LAPTOP);
+  const [priceCompareFilterQuery, setPriceCompareFilterQuery] = useState("");
+  const [priceCompareFilterStatus, setPriceCompareFilterStatus] = useState<"semua" | PriceCompareStatus>("semua");
+  const [priceCompareFilterMatch, setPriceCompareFilterMatch] = useState<"semua" | "match" | "tidak_match">("semua");
+  const [priceCompareRowPresetMap, setPriceCompareRowPresetMap] = useState<Record<string, string>>({});
+  const [priceCompareRowMarketplaceMap, setPriceCompareRowMarketplaceMap] = useState<Record<string, CompareCalcMarketplace>>({});
+  const [priceCompareRowFinalPriceMap, setPriceCompareRowFinalPriceMap] = useState<Record<string, string>>({});
+  const todayPriceListInputRef = useRef<HTMLInputElement | null>(null);
+  const previousPriceListInputRef = useRef<HTMLInputElement | null>(null);
 
   const [tokopediaFee, setTokopediaFee] = useState("4.75");
   const [shopeeFee, setShopeeFee] = useState("5.25");
@@ -1060,6 +1161,115 @@ export default function Page() {
     mallAfiliasiAktif,
     mallAfiliasiPct
   };
+  const priceComparePresetResolved = useMemo(() => {
+    const normalizeName = (value: string) => value.trim().toLowerCase();
+    const laptopPreset = presets.find((preset) => {
+      const key = normalizeName(preset.name);
+      return key === "preset laptop" || key.includes("preset laptop");
+    });
+
+    if (priceComparePresetId === PRICE_COMPARE_PRESET_AUTO_LAPTOP) {
+      if (laptopPreset) {
+        return { label: `${laptopPreset.name} (auto)`, data: laptopPreset.data };
+      }
+      return { label: "Preset Aktif di Kalkulator (fallback auto)", data: currentPresetData };
+    }
+
+    if (priceComparePresetId === PRICE_COMPARE_PRESET_ACTIVE) {
+      return { label: "Preset Aktif di Kalkulator", data: currentPresetData };
+    }
+
+    const selectedPreset = presets.find((preset) => preset.id === priceComparePresetId);
+    if (selectedPreset) {
+      return { label: selectedPreset.name, data: selectedPreset.data };
+    }
+
+    return { label: "Preset Aktif di Kalkulator", data: currentPresetData };
+  }, [currentPresetData, presets, priceComparePresetId]);
+
+  const priceCompareRowsWithCalc = useMemo(
+    () =>
+      priceCompareRows.map((row) => {
+        const rowKey = getPriceCompareRowKey(row);
+        const presetId = priceCompareRowPresetMap[rowKey] ?? priceComparePresetId;
+        const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "tokopedia";
+        const resolvedPreset = resolveComparePresetById(presetId);
+        const calc = calcItemPriceFromPreset(row.todayPrice, targetMargin, resolvedPreset.data);
+        const rekomSelected =
+          marketplace === "tokopedia"
+            ? calc.rekomTokopedia
+            : marketplace === "shopee"
+              ? calc.rekomShopee
+              : calc.rekomMall;
+        const rawFinal = (priceCompareRowFinalPriceMap[rowKey] ?? "").trim();
+        const parsedFinal = Number(rawFinal);
+        const hasManualFinal = rawFinal !== "" && Number.isFinite(parsedFinal) && parsedFinal > 0;
+        const hasPresetOverride = Object.prototype.hasOwnProperty.call(priceCompareRowPresetMap, rowKey);
+        const hasMarketplaceOverride = Object.prototype.hasOwnProperty.call(priceCompareRowMarketplaceMap, rowKey);
+        const hasRowAdjustment = hasPresetOverride || hasMarketplaceOverride;
+        const finalPrice = hasManualFinal ? Math.round(parsedFinal) : Math.round(rekomSelected || 0);
+        return {
+          row,
+          rowKey,
+          presetId,
+          resolvedPreset,
+          marketplace,
+          calc,
+          rekomSelected,
+          finalPrice,
+          hasManualFinal,
+          sourceLabel: hasManualFinal ? "Manual Override" : hasRowAdjustment ? "Penyesuaian Baris" : "Global Margin"
+        };
+      }),
+    [
+      priceCompareRows,
+      priceCompareRowPresetMap,
+      priceComparePresetId,
+      priceCompareRowMarketplaceMap,
+      priceCompareRowFinalPriceMap,
+      resolveComparePresetById,
+      targetMargin
+    ]
+  );
+  const filteredPriceCompareRowsWithCalc = useMemo(() => {
+    const query = priceCompareFilterQuery.trim().toLowerCase();
+    return priceCompareRowsWithCalc.filter(({ row }) => {
+      if (priceCompareFilterStatus !== "semua" && row.status !== priceCompareFilterStatus) return false;
+      if (priceCompareFilterMatch === "match" && !row.matched) return false;
+      if (priceCompareFilterMatch === "tidak_match" && row.matched) return false;
+      if (!query) return true;
+
+      const todayName = row.todayProductName.toLowerCase();
+      const previousName = String(row.previousProductName || "").toLowerCase();
+      return todayName.includes(query) || previousName.includes(query);
+    });
+  }, [priceCompareFilterMatch, priceCompareFilterQuery, priceCompareFilterStatus, priceCompareRowsWithCalc]);
+
+  function getPriceCompareRowKey(row: PriceCompareRow) {
+    return `${row.todayRowNumber}-${row.todayProductName}`;
+  }
+
+  function resolveComparePresetById(presetId: string) {
+    const normalizeName = (value: string) => value.trim().toLowerCase();
+    const laptopPreset = presets.find((preset) => {
+      const key = normalizeName(preset.name);
+      return key === "preset laptop" || key.includes("preset laptop");
+    });
+
+    if (presetId === PRICE_COMPARE_PRESET_AUTO_LAPTOP) {
+      if (laptopPreset) return { label: `${laptopPreset.name} (auto)`, data: laptopPreset.data };
+      return { label: "Preset Aktif di Kalkulator (fallback auto)", data: currentPresetData };
+    }
+
+    if (presetId === PRICE_COMPARE_PRESET_ACTIVE) {
+      return { label: "Preset Aktif di Kalkulator", data: currentPresetData };
+    }
+
+    const found = presets.find((preset) => preset.id === presetId);
+    if (found) return { label: found.name, data: found.data };
+
+    return { label: "Preset Aktif di Kalkulator", data: currentPresetData };
+  }
 
   const applyAuthUser = useCallback((user: User | null, map: Record<string, UserRole>) => {
     if (!user) {
@@ -2645,6 +2855,293 @@ export default function Page() {
     }
   }
 
+  function isAllowedPriceFile(file: File) {
+    const name = file.name.toLowerCase();
+    return name.endsWith(".xlsx") || name.endsWith(".csv");
+  }
+
+  function handlePriceListFile(file: File | null, target: "today" | "previous") {
+    if (!file) return;
+    if (!isAllowedPriceFile(file)) {
+      setPriceCompareNotice("Format file tidak didukung. Gunakan .xlsx atau .csv.");
+      return;
+    }
+
+    if (target === "today") {
+      setTodayPriceListFile(file);
+      setPriceCompareNotice(`File price list hari ini siap: ${file.name}`);
+      return;
+    }
+    setPreviousPriceListFile(file);
+    setPriceCompareNotice(`File price list sebelumnya siap: ${file.name}`);
+  }
+
+  function handleTodayPriceListInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    handlePriceListFile(file, "today");
+  }
+
+  function handlePreviousPriceListInputChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] ?? null;
+    handlePriceListFile(file, "previous");
+  }
+
+  function handleTodayPriceListDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsTodayPriceListDragOver(false);
+    const file = event.dataTransfer.files?.[0] ?? null;
+    handlePriceListFile(file, "today");
+  }
+
+  function handlePreviousPriceListDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsPreviousPriceListDragOver(false);
+    const file = event.dataTransfer.files?.[0] ?? null;
+    handlePriceListFile(file, "previous");
+  }
+
+  function handleTodayPriceListDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsTodayPriceListDragOver(true);
+  }
+
+  function handlePreviousPriceListDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsPreviousPriceListDragOver(true);
+  }
+
+  function handleTodayPriceListDragLeave() {
+    setIsTodayPriceListDragOver(false);
+  }
+
+  function handlePreviousPriceListDragLeave() {
+    setIsPreviousPriceListDragOver(false);
+  }
+
+  async function handleRunPriceCompare() {
+    if (!todayPriceListFile || !previousPriceListFile) {
+      setPriceCompareNotice("Pilih file price list hari ini dan sebelumnya terlebih dahulu.");
+      return;
+    }
+
+    setIsPriceCompareLoading(true);
+    setPriceCompareNotice("Menganalisis file price list hari ini dan sebelumnya...");
+
+    try {
+      const formData = new FormData();
+      formData.append("today_file", todayPriceListFile);
+      formData.append("previous_file", previousPriceListFile);
+
+      const response = await fetch("/api/price-compare", {
+        method: "POST",
+        body: formData
+      });
+      const payload = (await response.json()) as PriceCompareApiResponse;
+
+      if (!response.ok || !payload.ok) {
+        setPriceCompareNotice(payload.error || "Gagal membandingkan data harga.");
+        return;
+      }
+
+      const rows = payload.data?.rows ?? [];
+      const summary = payload.data?.summary ?? null;
+      setPriceCompareRows(rows);
+      setPriceCompareRowPresetMap({});
+      setPriceCompareRowMarketplaceMap({});
+      setPriceCompareRowFinalPriceMap({});
+      setPriceCompareSummary(summary);
+      setPriceCompareNotice(
+        summary
+          ? `Perbandingan selesai: ${summary.matchedRows}/${summary.totalRows} produk berhasil dicocokkan.`
+          : "Perbandingan selesai."
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Terjadi kesalahan saat upload file.";
+      setPriceCompareNotice(message);
+    } finally {
+      setIsPriceCompareLoading(false);
+    }
+  }
+
+  function useComparisonPrice(value: number, target: PriceFetchTarget) {
+    if (!Number.isFinite(value) || value <= 0) return;
+    const rounded = Math.round(value);
+    if (target === "modal") {
+      setModal(rounded);
+      setPriceCompareNotice(`Harga ${rupiah(rounded)} (price list hari ini) diterapkan ke Modal.`);
+      return;
+    }
+    setHarga(rounded);
+    setPriceCompareNotice(`Harga ${rupiah(rounded)} (price list hari ini) diterapkan ke Harga Jual.`);
+  }
+
+  function handleCalculateRowToCalculator(row: PriceCompareRow) {
+    if (!row.todayPrice || row.todayPrice <= 0) {
+      setPriceCompareNotice("Harga hari ini tidak valid untuk dihitung ke kalkulator.");
+      return;
+    }
+
+    const rowKey = getPriceCompareRowKey(row);
+    const presetId = priceCompareRowPresetMap[rowKey] ?? priceComparePresetId;
+    const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "tokopedia";
+    const resolvedPreset = resolveComparePresetById(presetId);
+    const calc = calcItemPriceFromPreset(row.todayPrice, targetMargin, resolvedPreset.data);
+
+    const rekomHarga =
+      marketplace === "tokopedia"
+        ? calc.rekomTokopedia
+        : marketplace === "shopee"
+          ? calc.rekomShopee
+          : calc.rekomMall;
+    const rawManualFinal = (priceCompareRowFinalPriceMap[rowKey] ?? "").trim();
+    const parsedManualFinal = Number(rawManualFinal);
+    const finalHarga =
+      rawManualFinal !== "" && Number.isFinite(parsedManualFinal) && parsedManualFinal > 0
+        ? Math.round(parsedManualFinal)
+        : Math.round(rekomHarga || 0);
+
+    applyPreset(resolvedPreset.data);
+    setModal(Math.round(row.todayPrice));
+    if (Number.isFinite(finalHarga) && finalHarga > 0) {
+      setHarga(finalHarga);
+    }
+    setActiveSection("kalkulator-potongan");
+
+    const marketplaceLabel =
+      marketplace === "tokopedia" ? "Tokopedia" : marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
+    setPriceCompareNotice(
+      `Produk "${row.todayProductName}" diproses ke Kalkulator. Preset: ${resolvedPreset.label}, target harga ${marketplaceLabel}: ${rupiahOrDash(finalHarga)}.`
+    );
+  }
+
+  async function handleExportPriceCompare() {
+    if (!priceCompareRowsWithCalc.length) {
+      setPriceCompareNotice("Belum ada hasil compare untuk diekspor.");
+      return;
+    }
+    if (isPriceCompareExporting) return;
+
+    setIsPriceCompareExporting(true);
+    try {
+      const { Workbook } = await import("exceljs");
+      const workbook = new Workbook();
+      const compareSheet = workbook.addWorksheet("Compare");
+      compareSheet.columns = [
+        { header: "Baris Hari Ini", key: "todayRow", width: 14 },
+        { header: "Produk Hari Ini", key: "todayProduct", width: 38 },
+        { header: "Harga Hari Ini", key: "todayPrice", width: 16 },
+        { header: "Produk Sebelumnya", key: "previousProduct", width: 38 },
+        { header: "Harga Sebelumnya", key: "previousPrice", width: 16 },
+        { header: "Selisih", key: "difference", width: 14 },
+        { header: "Status", key: "status", width: 24 },
+        { header: "Similarity", key: "similarity", width: 12 },
+        { header: "Preset Dipakai", key: "presetLabel", width: 26 },
+        { header: "Marketplace Hitung", key: "marketplace", width: 20 },
+        { header: "Target Net", key: "targetNet", width: 16 },
+        { header: "Rekom Tokopedia", key: "rekomTokopedia", width: 18 },
+        { header: "Rekom Shopee", key: "rekomShopee", width: 16 },
+        { header: "Rekom Mall", key: "rekomMall", width: 16 },
+        { header: "Harga Final", key: "finalPrice", width: 16 },
+        { header: "Sumber Perhitungan", key: "sourceLabel", width: 20 }
+      ];
+
+      compareSheet.getRow(1).font = { bold: true };
+      compareSheet.getRow(1).fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFE5E7EB" }
+      };
+
+      const getStatusFill = (status: PriceCompareStatus) => {
+        if (status === "today_cheaper") return "FFD1FAE5";
+        if (status === "previous_cheaper") return "FFFEE2E2";
+        if (status === "same") return "FFFEF3C7";
+        return "FFF1F5F9";
+      };
+
+      for (const { row, calc, marketplace, resolvedPreset, finalPrice, sourceLabel } of priceCompareRowsWithCalc) {
+        const marketplaceLabel =
+          marketplace === "tokopedia" ? "Tokopedia" : marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
+        const added = compareSheet.addRow({
+          todayRow: row.todayRowNumber,
+          todayProduct: row.todayProductName,
+          todayPrice: row.todayPrice,
+          previousProduct: row.previousProductName || "",
+          previousPrice: row.previousPrice ?? "",
+          difference: row.difference ?? "",
+          status: priceCompareStatusLabel[row.status],
+          similarity: row.similarityScore,
+          presetLabel: resolvedPreset.label,
+          marketplace: marketplaceLabel,
+          targetNet: Math.round(calc.targetNet),
+          rekomTokopedia: Number.isFinite(calc.rekomTokopedia) ? Math.round(calc.rekomTokopedia) : "",
+          rekomShopee: Number.isFinite(calc.rekomShopee) ? Math.round(calc.rekomShopee) : "",
+          rekomMall: Number.isFinite(calc.rekomMall) ? Math.round(calc.rekomMall) : "",
+          finalPrice: Number.isFinite(finalPrice) && finalPrice > 0 ? finalPrice : "",
+          sourceLabel
+        });
+
+        const statusFill = getStatusFill(row.status);
+        const statusCell = added.getCell(7);
+        statusCell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: statusFill }
+        };
+        statusCell.font = { bold: true };
+      }
+
+      for (const col of [3, 5, 6, 11, 12, 13, 14]) {
+        compareSheet.getColumn(col).numFmt = "#,##0";
+      }
+
+      const summarySheet = workbook.addWorksheet("Summary");
+      summarySheet.columns = [
+        { header: "Metrik", key: "metric", width: 28 },
+        { header: "Nilai", key: "value", width: 30 }
+      ];
+      summarySheet.getRow(1).font = { bold: true };
+      summarySheet.getRow(1).fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFE5E7EB" }
+      };
+      const summaryRows = [
+        { metric: "Waktu Export", value: new Date().toLocaleString("id-ID") },
+        { metric: "Preset Perhitungan", value: priceComparePresetResolved.label },
+        { metric: "Target Margin (%)", value: targetMargin },
+        { metric: "Total Baris", value: priceCompareSummary?.totalRows ?? priceCompareRowsWithCalc.length },
+        { metric: "Berhasil Match", value: priceCompareSummary?.matchedRows ?? 0 },
+        { metric: "Baris Manual Override", value: priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length },
+        { metric: "Hari Ini Lebih Murah", value: priceCompareSummary?.todayCheaperCount ?? 0 },
+        { metric: "Sebelumnya Lebih Murah", value: priceCompareSummary?.previousCheaperCount ?? 0 },
+        { metric: "Tidak Naik", value: priceCompareSummary?.samePriceCount ?? 0 }
+      ];
+      summaryRows.forEach((item) => summarySheet.addRow(item));
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      const fileName = `hasil-compare-pricelist-${stamp}.xlsx`;
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setPriceCompareNotice("File hasil compare berhasil diekspor ke Excel.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal mengekspor hasil compare.";
+      setPriceCompareNotice(message);
+    } finally {
+      setIsPriceCompareExporting(false);
+    }
+  }
+
   async function runSupabaseHealthCheck() {
     if (healthCheckLoading) return;
 
@@ -4048,6 +4545,19 @@ export default function Page() {
         `Harga jual aktif: ${rupiah(harga)}`
       ]
     },
+    "compare-harga": {
+      title: "Mode Compare Harga Aktif",
+      subtitle: "Bandingkan price list hari ini dengan sebelumnya, lalu hitung rekomendasi harga per barang.",
+      tone: "from-cyan-50 to-white",
+      chip: "bg-cyan-100 text-cyan-700",
+      dot: "bg-cyan-500",
+      badge: "Compare",
+      stats: [
+        `Baris compare: ${priceCompareSummary?.totalRows ?? priceCompareRows.length}`,
+        `Produk match: ${priceCompareSummary?.matchedRows ?? 0}`,
+        `Preset compare: ${priceComparePresetResolved.label}`
+      ]
+    },
     "pembuatan-nota": {
       title: `Mode ${invoiceDocLabel} Aktif`,
       subtitle: "Siapkan dokumen penjualan atau penawaran cepat dengan data pembeli, item, dan ringkasan total.",
@@ -4291,6 +4801,19 @@ export default function Page() {
                 Kalkulator
               </button>
             ) : null}
+            {allowedSections.includes("compare-harga") ? (
+              <button
+                type="button"
+                onClick={() => setActiveSection("compare-harga")}
+                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                  activeSection === "compare-harga"
+                    ? "border-cyan-300 bg-cyan-50 text-cyan-700"
+                    : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                }`}
+              >
+                Compare Harga
+              </button>
+            ) : null}
             {allowedSections.includes("pembuatan-nota") ? (
               <button
                 type="button"
@@ -4340,6 +4863,19 @@ export default function Page() {
                     }`}
                   >
                     Kalkulator Potongan
+                  </button>
+                ) : null}
+                {allowedSections.includes("compare-harga") ? (
+                  <button
+                    type="button"
+                    onClick={() => setActiveSection("compare-harga")}
+                    className={`rounded-2xl border px-3 py-2 text-left font-medium transition duration-200 hover:-translate-y-0.5 ${
+                      activeSection === "compare-harga"
+                        ? "border-cyan-300 bg-cyan-50 text-cyan-700"
+                        : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
+                    }`}
+                  >
+                    Compare Harga Pricelist
                   </button>
                 ) : null}
                 {allowedSections.includes("pembuatan-nota") ? (
@@ -4673,14 +5209,25 @@ export default function Page() {
               ))}
             </div>
           </section>
-          {activeSection === "kalkulator-potongan" ? (
-          <section id="kalkulator-potongan" className="animate-sweep-in grid gap-4 lg:grid-cols-[1.08fr_1fr]">
+          {activeSection === "kalkulator-potongan" || activeSection === "compare-harga" ? (
+          <section
+            id="kalkulator-potongan"
+            className={`animate-sweep-in grid gap-4 ${
+              activeSection === "compare-harga" ? "lg:grid-cols-1" : "lg:grid-cols-[1.08fr_1fr]"
+            }`}
+          >
         <article className="card-shell p-5">
           <h2 className="mb-1 flex items-center gap-2 text-base font-bold text-slate-900">
-            <span className="h-2 w-2 rounded-full bg-emerald-500" /> Data Produk, Fee, dan Fitur Marketplace
+            <span className={`h-2 w-2 rounded-full ${activeSection === "compare-harga" ? "bg-cyan-500" : "bg-emerald-500"}`} />{" "}
+            {activeSection === "compare-harga" ? "Compare Harga Pricelist" : "Data Produk, Fee, dan Fitur Marketplace"}
           </h2>
-          <p className="mb-4 text-xs text-slate-500">Atur parameter utama, lalu bandingkan performa tiap channel penjualan.</p>
+          <p className="mb-4 text-xs text-slate-500">
+            {activeSection === "compare-harga"
+              ? "Upload dua file pricelist untuk membandingkan harga hari ini vs sebelumnya."
+              : "Atur parameter utama, lalu bandingkan performa tiap channel penjualan."}
+          </p>
 
+          {activeSection === "kalkulator-potongan" ? (
           <div className="mb-4 rounded-2xl border border-stone-200 bg-gradient-to-br from-stone-100/70 to-white p-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Preset Potongan</p>
             {canManagePreset ? (
@@ -4768,12 +5315,13 @@ export default function Page() {
             ) : null}
             {presetNotice ? <p className="mt-2 text-xs text-slate-600">{presetNotice}</p> : null}
           </div>
+          ) : null}
 
           <div className="grid gap-3 md:grid-cols-2">
-            <NumberInput label="Harga Jual (Rp)" value={harga} onChange={setHarga} step={100} />
-            <NumberInput label="Modal (Rp)" value={modal} onChange={setModal} step={100} />
-            <NumberInput label="Target Margin (%)" value={targetMargin} onChange={setTargetMargin} step={0.1} />
-            {ENABLE_AUTO_PRICE_FETCH ? (
+            {activeSection === "kalkulator-potongan" ? <NumberInput label="Harga Jual (Rp)" value={harga} onChange={setHarga} step={100} /> : null}
+            {activeSection === "kalkulator-potongan" ? <NumberInput label="Modal (Rp)" value={modal} onChange={setModal} step={100} /> : null}
+            {activeSection === "kalkulator-potongan" ? <NumberInput label="Target Margin (%)" value={targetMargin} onChange={setTargetMargin} step={0.1} /> : null}
+            {ENABLE_AUTO_PRICE_FETCH && activeSection === "kalkulator-potongan" ? (
               <div className="md:col-span-2 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Ambil Harga Otomatis</p>
                 <div className="mt-2 grid gap-2 md:grid-cols-[1fr_150px_auto]">
@@ -4804,17 +5352,404 @@ export default function Page() {
                 {priceFetchNotice ? <p className="mt-2 text-xs text-slate-600">{priceFetchNotice}</p> : null}
               </div>
             ) : null}
+            {activeSection === "compare-harga" ? (
+            <div className="md:col-span-2 rounded-2xl border border-cyan-200 bg-cyan-50/70 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-cyan-700">Bandingkan Price List Hari Ini vs Sebelumnya</p>
+                <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
+                  Format: .xlsx / .csv
+                </span>
+              </div>
+              <div className="mt-2 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-xs text-slate-600">
+                Alur cepat: <strong>1) Upload 2 file</strong> {"->"} <strong>2) Atur margin + preset</strong> {"->"} <strong>3) Proses perbandingan</strong>.
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <div
+                  onDrop={handleTodayPriceListDrop}
+                  onDragOver={handleTodayPriceListDragOver}
+                  onDragLeave={handleTodayPriceListDragLeave}
+                  className={`rounded-2xl border-2 border-dashed bg-white/90 px-4 py-5 text-center transition ${
+                    isTodayPriceListDragOver ? "border-cyan-400 ring-2 ring-cyan-200" : "border-cyan-200"
+                  }`}
+                >
+                  <input
+                    ref={todayPriceListInputRef}
+                    type="file"
+                    accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    onChange={handleTodayPriceListInputChange}
+                    className="hidden"
+                  />
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">Price List Hari Ini</p>
+                  <p className="mt-1 text-sm text-slate-700">
+                    Drag & drop, atau{" "}
+                    <button type="button" onClick={() => todayPriceListInputRef.current?.click()} className="font-semibold text-cyan-700 underline">
+                      pilih file
+                    </button>
+                    .
+                  </p>
+                  {todayPriceListFile ? (
+                    <p className="mt-2 text-xs font-medium text-slate-700">
+                      {todayPriceListFile.name} ({Math.max(1, Math.round(todayPriceListFile.size / 1024))} KB)
+                    </p>
+                  ) : null}
+                </div>
+                <div
+                  onDrop={handlePreviousPriceListDrop}
+                  onDragOver={handlePreviousPriceListDragOver}
+                  onDragLeave={handlePreviousPriceListDragLeave}
+                  className={`rounded-2xl border-2 border-dashed bg-white/90 px-4 py-5 text-center transition ${
+                    isPreviousPriceListDragOver ? "border-cyan-400 ring-2 ring-cyan-200" : "border-cyan-200"
+                  }`}
+                >
+                  <input
+                    ref={previousPriceListInputRef}
+                    type="file"
+                    accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    onChange={handlePreviousPriceListInputChange}
+                    className="hidden"
+                  />
+                  <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">Price List Sebelumnya</p>
+                  <p className="mt-1 text-sm text-slate-700">
+                    Drag & drop, atau{" "}
+                    <button type="button" onClick={() => previousPriceListInputRef.current?.click()} className="font-semibold text-cyan-700 underline">
+                      pilih file
+                    </button>
+                    .
+                  </p>
+                  {previousPriceListFile ? (
+                    <p className="mt-2 text-xs font-medium text-slate-700">
+                      {previousPriceListFile.name} ({Math.max(1, Math.round(previousPriceListFile.size / 1024))} KB)
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              <div className="mt-2 grid items-start gap-2 md:grid-cols-2 lg:grid-cols-[180px_240px_minmax(0,1fr)]">
+                <label className="grid gap-1 self-start text-xs text-slate-600">
+                  <span>Target Margin (%)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={targetMargin}
+                    onChange={(e) => setTargetMargin(Number(e.target.value || 0))}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  />
+                </label>
+                <label className="grid gap-1 self-start text-xs text-slate-600">
+                  <span>Preset Hitung Per Barang</span>
+                  <select
+                    value={priceComparePresetId}
+                    onChange={(e) => setPriceComparePresetId(e.target.value)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value={PRICE_COMPARE_PRESET_AUTO_LAPTOP}>Auto: PRESET LAPTOP</option>
+                    <option value={PRICE_COMPARE_PRESET_ACTIVE}>Preset Aktif di Kalkulator</option>
+                    {presets.map((preset) => (
+                      <option key={`compare-preset-${preset.id}`} value={preset.id}>
+                        {preset.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-slate-600 md:col-span-2 lg:col-span-1">
+                  Preset terpakai:{" "}
+                  <strong className="text-slate-900">{priceComparePresetResolved.label}</strong>
+                  <br />
+                  Tip: gunakan tombol <strong className="text-slate-900">Ke Modal/Ke Harga Jual</strong> di tabel untuk isi kalkulator cepat.
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRunPriceCompare}
+                  disabled={isPriceCompareLoading || !todayPriceListFile || !previousPriceListFile}
+                  className="rounded-2xl border border-cyan-200 bg-cyan-100 px-3 py-2 text-sm font-medium text-cyan-800 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isPriceCompareLoading ? "Memproses..." : "Proses Perbandingan"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportPriceCompare}
+                  disabled={isPriceCompareExporting || !priceCompareRowsWithCalc.length}
+                  className="rounded-2xl border border-emerald-200 bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isPriceCompareExporting ? "Mengekspor..." : "Export Hasil Compare (.xlsx)"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPriceCompareRows([]);
+                    setPriceCompareSummary(null);
+                    setPriceCompareNotice("");
+                    setPriceCompareRowPresetMap({});
+                    setPriceCompareRowMarketplaceMap({});
+                    setPriceCompareRowFinalPriceMap({});
+                    setTodayPriceListFile(null);
+                    setPreviousPriceListFile(null);
+                    if (todayPriceListInputRef.current) todayPriceListInputRef.current.value = "";
+                    if (previousPriceListInputRef.current) previousPriceListInputRef.current.value = "";
+                  }}
+                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                >
+                  Reset
+                </button>
+                <span className="text-xs text-slate-500">
+                  Status warna: <span className="font-medium text-emerald-700">hijau</span> (hari ini lebih murah),{" "}
+                  <span className="font-medium text-rose-700">merah</span> (sebelumnya lebih murah),{" "}
+                  <span className="font-medium text-yellow-700">kuning</span> (tidak naik).
+                </span>
+              </div>
+              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.4fr_220px_180px_auto]">
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Cari Produk</span>
+                  <input
+                    value={priceCompareFilterQuery}
+                    onChange={(e) => setPriceCompareFilterQuery(e.target.value)}
+                    placeholder="Cari nama produk hari ini/sebelumnya..."
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Filter Status</span>
+                  <select
+                    value={priceCompareFilterStatus}
+                    onChange={(e) => setPriceCompareFilterStatus(e.target.value as "semua" | PriceCompareStatus)}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="semua">Semua Status</option>
+                    <option value="today_cheaper">Hari Ini Lebih Murah</option>
+                    <option value="previous_cheaper">Sebelumnya Lebih Murah</option>
+                    <option value="same">Tidak Naik</option>
+                    <option value="unmatched">Tidak Match</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Filter Match</span>
+                  <select
+                    value={priceCompareFilterMatch}
+                    onChange={(e) => setPriceCompareFilterMatch(e.target.value as "semua" | "match" | "tidak_match")}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="semua">Semua</option>
+                    <option value="match">Match</option>
+                    <option value="tidak_match">Tidak Match</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPriceCompareFilterQuery("");
+                    setPriceCompareFilterStatus("semua");
+                    setPriceCompareFilterMatch("semua");
+                  }}
+                  className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                >
+                  Reset Filter
+                </button>
+              </div>
+              {priceCompareNotice ? <p className="mt-2 text-xs text-slate-600">{priceCompareNotice}</p> : null}
+              {priceCompareRowsWithCalc.length ? (
+                <p className="mt-2 text-xs text-slate-600">
+                  Menampilkan <strong>{filteredPriceCompareRowsWithCalc.length}</strong> dari{" "}
+                  <strong>{priceCompareRowsWithCalc.length}</strong> baris hasil compare. Override manual:{" "}
+                  <strong>{priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length}</strong>.
+                </p>
+              ) : null}
+              {priceCompareSummary ? (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                  <div className="rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-slate-600">
+                    Total Baris
+                    <p className="text-base font-semibold text-slate-900">{priceCompareSummary.totalRows}</p>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-slate-600">
+                    Match
+                    <p className="text-base font-semibold text-slate-900">{priceCompareSummary.matchedRows}</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-2.5 py-2 text-xs text-emerald-700">
+                    Hari Ini Lebih Murah
+                    <p className="text-base font-semibold text-emerald-800">{priceCompareSummary.todayCheaperCount}</p>
+                  </div>
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-2 text-xs text-rose-700">
+                    Sebelumnya Lebih Murah
+                    <p className="text-base font-semibold text-rose-800">{priceCompareSummary.previousCheaperCount}</p>
+                  </div>
+                  <div className="rounded-xl border border-yellow-200 bg-yellow-50 px-2.5 py-2 text-xs text-yellow-700">
+                    Tidak Naik
+                    <p className="text-base font-semibold text-yellow-800">{priceCompareSummary.samePriceCount}</p>
+                  </div>
+                </div>
+              ) : null}
+              {filteredPriceCompareRowsWithCalc.length ? (
+                <div className="mt-3 max-h-[360px] overflow-auto rounded-2xl border border-stone-200 bg-white">
+                  <table className="min-w-full text-left text-xs">
+                    <thead className="sticky top-0 z-10 bg-stone-100 text-slate-700">
+                      <tr>
+                        <th className="px-2.5 py-2 font-semibold">Produk (Hari Ini)</th>
+                        <th className="px-2.5 py-2 font-semibold text-right">Harga Hari Ini</th>
+                        <th className="px-2.5 py-2 font-semibold">Produk (Sebelumnya)</th>
+                        <th className="px-2.5 py-2 font-semibold text-right">Harga Sebelumnya</th>
+                        <th className="px-2.5 py-2 font-semibold text-right">Selisih</th>
+                        <th className="px-2.5 py-2 font-semibold text-right">Rekom Tokopedia</th>
+                        <th className="px-2.5 py-2 font-semibold text-right">Rekom Shopee</th>
+                        <th className="px-2.5 py-2 font-semibold text-right">Rekom Mall</th>
+                        <th className="px-2.5 py-2 font-semibold">Status</th>
+                        <th className="px-2.5 py-2 font-semibold text-right">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredPriceCompareRowsWithCalc.map(({ row, calc, rowKey, presetId, marketplace, finalPrice, sourceLabel }, index) => {
+                        const statusClass =
+                          row.status === "today_cheaper"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : row.status === "previous_cheaper"
+                              ? "bg-rose-50 text-rose-700 border-rose-200"
+                              : row.status === "same"
+                                ? "bg-yellow-50 text-yellow-700 border-yellow-200"
+                                : "bg-stone-100 text-slate-600 border-stone-200";
+                        const rowTintClass =
+                          row.status === "today_cheaper"
+                            ? "bg-emerald-50/40"
+                            : row.status === "previous_cheaper"
+                              ? "bg-rose-50/40"
+                              : row.status === "same"
+                                ? "bg-yellow-50/50"
+                                : "";
+
+                        return (
+                          <tr key={`${row.todayRowNumber}-${index}`} className={`border-t border-stone-100 ${rowTintClass}`}>
+                            <td className="px-2.5 py-2 align-top text-slate-800">
+                              <p className="font-medium">{row.todayProductName}</p>
+                              <p className="text-[11px] text-slate-500">Baris {row.todayRowNumber}</p>
+                            </td>
+                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiah(row.todayPrice)}</td>
+                            <td className="px-2.5 py-2 align-top text-slate-700">{row.matched ? row.previousProductName : "-"}</td>
+                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
+                              {row.matched && row.previousPrice ? rupiah(row.previousPrice) : "-"}
+                            </td>
+                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
+                              {row.matched && typeof row.difference === "number" ? rupiah(row.difference) : "-"}
+                            </td>
+                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomTokopedia)}</td>
+                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomShopee)}</td>
+                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomMall)}</td>
+                            <td className="px-2.5 py-2 align-top">
+                              <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-medium ${statusClass}`}>
+                                {priceCompareStatusLabel[row.status]}
+                              </span>
+                            </td>
+                            <td className="px-2.5 py-2 align-top text-right">
+                              {row.matched && row.todayPrice ? (
+                                <div className="grid justify-items-end gap-1">
+                                  <select
+                                    value={presetId}
+                                    onChange={(e) =>
+                                      setPriceCompareRowPresetMap((prev) => ({ ...prev, [rowKey]: e.target.value }))
+                                    }
+                                    className="w-[170px] rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                  >
+                                    <option value={PRICE_COMPARE_PRESET_AUTO_LAPTOP}>Auto: PRESET LAPTOP</option>
+                                    <option value={PRICE_COMPARE_PRESET_ACTIVE}>Preset Aktif</option>
+                                    {presets.map((preset) => (
+                                      <option key={`row-preset-${rowKey}-${preset.id}`} value={preset.id}>
+                                        {preset.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <select
+                                    value={marketplace}
+                                    onChange={(e) =>
+                                      setPriceCompareRowMarketplaceMap((prev) => ({
+                                        ...prev,
+                                        [rowKey]: e.target.value as CompareCalcMarketplace
+                                      }))
+                                    }
+                                    className="w-[170px] rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                  >
+                                    <option value="tokopedia">Hitung Tokopedia</option>
+                                    <option value="shopee">Hitung Shopee</option>
+                                    <option value="mall">Hitung Tokopedia Mall</option>
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCalculateRowToCalculator(row)}
+                                    className="w-[170px] rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700 transition hover:bg-cyan-100"
+                                  >
+                                    Hitung di Kalkulator
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={priceCompareRowFinalPriceMap[rowKey] ?? ""}
+                                    onChange={(e) =>
+                                      setPriceCompareRowFinalPriceMap((prev) => ({
+                                        ...prev,
+                                        [rowKey]: e.target.value
+                                      }))
+                                    }
+                                    placeholder="Harga final (opsional)"
+                                    className="w-[170px] rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-right text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                  />
+                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
+                                    {sourceLabel}: <strong className="text-slate-700">{rupiahOrDash(finalPrice)}</strong>
+                                  </p>
+                                  <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => useComparisonPrice(row.todayPrice, "modal")}
+                                    className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
+                                  >
+                                    Ke Modal
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => useComparisonPrice(row.todayPrice, "harga_jual")}
+                                    className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
+                                  >
+                                    Ke Harga Jual
+                                  </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-slate-400">-</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="mt-3 rounded-2xl border border-dashed border-stone-300 bg-white/80 px-4 py-6 text-center text-sm text-slate-600">
+                  {priceCompareRowsWithCalc.length
+                    ? "Tidak ada data yang cocok dengan filter saat ini."
+                    : (
+                      <>
+                        Hasil compare belum tersedia. Upload dua file lalu klik <strong>Proses Perbandingan</strong>.
+                      </>
+                    )}
+                </div>
+              )}
+            </div>
+            ) : null}
+            {activeSection === "kalkulator-potongan" ? (
             <SelectInput label="Fee Tokopedia (%)" value={tokopediaFee} onChange={setTokopediaFee}>
               { ["4.75","6.25","7.5","7.75","8","9.5","10"].map((v)=> <option key={v} value={v}>{v}%</option>) }
             </SelectInput>
+            ) : null}
+            {activeSection === "kalkulator-potongan" ? (
             <SelectInput label="Fee Shopee (%)" value={shopeeFee} onChange={setShopeeFee}>
               { ["5.25","6.50","6.75","9","9.50","10"].map((v)=> <option key={v} value={v}>{v}%</option>) }
             </SelectInput>
+            ) : null}
+            {activeSection === "kalkulator-potongan" ? (
             <SelectInput label="Fee Tokopedia Mall (%)" value={mallFee} onChange={setMallFee}>
               { ["3","3.7","6.95","7.2","7.75","8.2","9.2","10.2","11.7","12.2"].map((v)=> <option key={v} value={v}>{v}%</option>) }
             </SelectInput>
+            ) : null}
           </div>
 
+          {activeSection === "kalkulator-potongan" ? (
           <div className="mt-4 grid gap-2.5">
             <div className="grid gap-2 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-3">
               <div className="flex items-center justify-between gap-2">
@@ -4890,8 +5825,10 @@ export default function Page() {
               </ToggleRow>
             </div>
           </div>
+          ) : null}
         </article>
 
+        {activeSection === "kalkulator-potongan" ? (
         <article className="card-shell p-5">
           {([hasil.marginTokopedia, hasil.marginShopee, hasil.marginMall].some((margin) => margin < 0)) ? (
             <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
@@ -4999,6 +5936,7 @@ export default function Page() {
             </div>
           </div>
         </article>
+        ) : null}
       </section>
           ) : null}
 
@@ -6539,6 +7477,7 @@ export default function Page() {
     </main>
   );
 }
+
 
 
 
