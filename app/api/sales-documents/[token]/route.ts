@@ -12,6 +12,14 @@ function getBearerToken(request: NextRequest) {
   return authHeader.slice(7).trim();
 }
 
+function isMissingTaxColumnError(message: string) {
+  const text = message.toLowerCase();
+  return (
+    (text.includes("schema cache") || text.includes("column")) &&
+    (text.includes("grand_total") || text.includes("tax_enabled") || text.includes("tax_rate") || text.includes("tax_amount"))
+  );
+}
+
 export async function GET(_request: NextRequest, context: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await context.params;
@@ -21,13 +29,24 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
     }
 
     const supabaseAdmin = getSupabaseAdmin();
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, print_count, last_printed_at, created_at"
+        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
+    if (error && isMissingTaxColumnError(error.message || "")) {
+      const legacyResult = await supabaseAdmin
+        .from("sales_documents")
+        .select(
+          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, print_count, last_printed_at, created_at"
+        )
+        .eq("public_token", publicToken)
+        .maybeSingle();
+      data = legacyResult.data as typeof data;
+      error = legacyResult.error;
+    }
 
     if (error) {
       throw new Error(`Gagal membaca dokumen: ${error.message}`);
@@ -53,6 +72,10 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         notes: data.notes,
         items: Array.isArray(data.items) ? data.items : [],
         subtotal: Number(data.subtotal) || 0,
+        taxEnabled: Boolean(data.tax_enabled),
+        taxRate: Math.max(0, Number(data.tax_rate) || 11),
+        taxAmount: Math.max(0, Number(data.tax_amount) || 0),
+        grandTotal: Math.max(0, Number(data.grand_total) || Number(data.subtotal) || 0),
         printCount: Number(data.print_count) || 0,
         lastPrintedAt: data.last_printed_at,
         createdAt: data.created_at

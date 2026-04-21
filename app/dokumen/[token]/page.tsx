@@ -23,6 +23,10 @@ type DocumentRow = {
   notes: string;
   items: unknown;
   subtotal: number | string;
+  tax_enabled?: boolean;
+  tax_rate?: number | string;
+  tax_amount?: number | string;
+  grand_total?: number | string;
 };
 
 function rupiah(num: number) {
@@ -55,6 +59,14 @@ function normalizeItems(value: unknown): DocumentItem[] {
     .filter((item): item is DocumentItem => Boolean(item));
 }
 
+function isMissingTaxColumnError(message: string) {
+  const text = message.toLowerCase();
+  return (
+    (text.includes("schema cache") || text.includes("column")) &&
+    (text.includes("grand_total") || text.includes("tax_enabled") || text.includes("tax_rate") || text.includes("tax_amount"))
+  );
+}
+
 export const dynamic = "force-dynamic";
 
 export default async function DokumenPage({
@@ -62,7 +74,7 @@ export default async function DokumenPage({
   searchParams
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ autoprint?: string; includeSign?: string; includeBank?: string }>;
+  searchParams: Promise<{ autoprint?: string; includeSign?: string; includeBank?: string; includeTax?: string }>;
 }) {
   const { token } = await params;
   const query = await searchParams;
@@ -70,6 +82,9 @@ export default async function DokumenPage({
   const shouldAutoPrint = String(query?.autoprint || "").trim() === "1";
   const includeSignAndStamp = String(query?.includeSign || "1").trim() !== "0";
   const includeBankAccount = String(query?.includeBank || "").trim() === "1";
+  const includeTaxParamRaw = String(query?.includeTax || "").trim();
+  const hasTaxOverride = includeTaxParamRaw === "1" || includeTaxParamRaw === "0";
+  const includeTaxOverride = includeTaxParamRaw === "1";
   const bankInfoValue = DEFAULT_BANK_ACCOUNT_INFO.trim();
   if (!publicToken) {
     return (
@@ -86,13 +101,22 @@ export default async function DokumenPage({
 
   try {
     const supabaseAdmin = getSupabaseAdmin();
-    const result = await supabaseAdmin
+    let result = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal"
+        "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_rate, tax_amount, grand_total"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
+    if (result.error && isMissingTaxColumnError(result.error.message || "")) {
+      result = await supabaseAdmin
+        .from("sales_documents")
+        .select(
+          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal"
+        )
+        .eq("public_token", publicToken)
+        .maybeSingle();
+    }
     if (result.error) {
       queryError = result.error.message || "Gagal membaca data dokumen.";
     } else {
@@ -131,7 +155,12 @@ export default async function DokumenPage({
   const docTitle = isPenawaran ? "SURAT PENAWARAN BARANG" : "FAKTUR PENJUALAN";
   const docNoLabel = isPenawaran ? "No Penawaran" : "No Faktur";
   const totalLabel = isPenawaran ? "TOTAL PENAWARAN" : "TOTAL";
-  const total = Number(data.subtotal) || items.reduce((acc, item) => acc + item.qty * item.harga, 0);
+  const subtotal = Number(data.subtotal) || items.reduce((acc, item) => acc + item.qty * item.harga, 0);
+  const taxEnabledFromData = Boolean(data.tax_enabled);
+  const taxEnabled = hasTaxOverride ? includeTaxOverride : taxEnabledFromData;
+  const taxRate = Math.max(0, Number(data.tax_rate) || 11);
+  const taxAmount = taxEnabled ? Math.max(0, Number(data.tax_amount) || Math.round((subtotal * taxRate) / 100)) : 0;
+  const total = hasTaxOverride ? subtotal + taxAmount : Math.max(0, Number(data.grand_total) || subtotal + taxAmount);
   const buyerValue = String(data.buyer || "").trim();
   const phoneValue = String(data.phone || "").trim();
   const whatsappValue = String(data.whatsapp || "").trim();
@@ -251,13 +280,25 @@ export default async function DokumenPage({
           </table>
         </div>
 
+        {taxEnabled ? (
+          <div className="mt-2 grid gap-1 text-xs text-slate-700">
+            <div className="flex justify-end gap-2">
+              <span>Subtotal</span>
+              <strong>{rupiah(subtotal)}</strong>
+            </div>
+            <div className="flex justify-end gap-2">
+              <span>PPN ({taxRate.toFixed(2).replace(".", ",")}%)</span>
+              <strong>{rupiah(taxAmount)}</strong>
+            </div>
+          </div>
+        ) : null}
         <div className="total">
           {totalLabel}: {rupiah(total)}
         </div>
         <div className="notes">
           <strong>Catatan:</strong> {data.notes || "-"}
         </div>
-        {includeBankAccount && bankInfoValue ? (
+        {!isPenawaran && includeBankAccount && bankInfoValue ? (
           <div className="bank-section">
             <div className="bank-label">Rekening Pembayaran:</div>
             {bankInfoValue.split("\n").map((line, index) => (
@@ -270,7 +311,7 @@ export default async function DokumenPage({
             <div className="terms-title">KETERANGAN :</div>
             <div>* Barang yang sudah dibeli tidak bisa dikembalikan.</div>
             <div>* Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</div>
-            <div>* Harga diatas sudah termasuk Faktur Pajak.</div>
+            {taxEnabled ? <div>* Harga diatas sudah termasuk Faktur Pajak.</div> : null}
             <div>* Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</div>
             <div className="terms-closing">Terima kasih atas kepercayaan Anda.</div>
           </div>
@@ -279,7 +320,7 @@ export default async function DokumenPage({
           <div className="terms">
             <div className="terms-title">Syarat dan Ketentuan:</div>
             <ol className="terms-list">
-              <li>Harga diatas sudah termasuk Faktur Pajak.</li>
+              {taxEnabled ? <li>Harga diatas sudah termasuk Faktur Pajak.</li> : null}
               <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
               <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
               <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>

@@ -51,7 +51,7 @@ type PresetItem = {
 };
 
 type SectionId = "kalkulator-potongan" | "pembuatan-nota" | "rekap-penjualan";
-type UserRole = "admin" | "staff" | "viewer";
+type UserRole = "admin" | "staff" | "staff_offline" | "viewer";
 type InvoiceDocumentType = "faktur" | "penawaran";
 
 type InvoiceItem = {
@@ -87,6 +87,10 @@ type SalesDocumentDetailResponse = {
     notes: string;
     items: Array<{ nama: string; qty: number; harga: number }>;
     subtotal: number;
+    taxEnabled: boolean;
+    taxRate: number;
+    taxAmount: number;
+    grandTotal: number;
   };
 };
 type SalesDocumentHistoryRow = {
@@ -154,6 +158,13 @@ type ScrapeApiResponse = {
     scraped_via?: "http" | "playwright" | "proxy";
   };
 };
+type MyRoleApiResponse = {
+  ok: boolean;
+  error?: string;
+  data?: {
+    role?: UserRole;
+  };
+};
 
 type SalesRecapRow = {
   id: string;
@@ -193,6 +204,7 @@ const SECTION_LABEL: Record<SectionId, string> = {
 const ROLE_SECTION_ACCESS: Record<UserRole, SectionId[]> = {
   admin: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
   staff: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
+  staff_offline: ["kalkulator-potongan", "pembuatan-nota", "rekap-penjualan"],
   viewer: ["kalkulator-potongan", "rekap-penjualan"]
 };
 const MARKETPLACE_VISUAL = {
@@ -362,13 +374,15 @@ function normalizeEmail(value: string) {
 }
 
 function normalizeRole(raw: unknown): UserRole {
-  const role = String(raw ?? "").toLowerCase();
-  if (role === "admin" || role === "staff" || role === "viewer") return role;
+  const role = String(raw ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+  if (role === "admin" || role === "staff" || role === "staff_offline" || role === "viewer") return role;
   return "viewer";
 }
 
 function getDefaultAuthRole(): UserRole {
-  const raw = String(process.env.NEXT_PUBLIC_DEFAULT_AUTH_ROLE ?? "staff").toLowerCase();
+  const raw = String(process.env.NEXT_PUBLIC_DEFAULT_AUTH_ROLE ?? "viewer").toLowerCase();
   return normalizeRole(raw === "admin" ? "staff" : raw);
 }
 
@@ -539,7 +553,7 @@ function normalizeSalesDocumentHistoryRow(value: unknown): SalesDocumentHistoryR
   const documentType: InvoiceDocumentType = rawType === "penawaran" ? "penawaran" : "faktur";
   const invoiceDate = String(row.invoice_date ?? row.invoiceDate ?? "").trim();
   const buyer = String(row.buyer ?? "").trim();
-  const subtotal = Math.max(0, Number(row.subtotal ?? 0) || 0);
+  const subtotal = Math.max(0, Number(row.grand_total ?? row.grandTotal ?? row.subtotal ?? 0) || 0);
   const createdAtRaw = row.created_at ?? row.createdAt;
   const createdAt = typeof createdAtRaw === "string" && createdAtRaw.trim() ? createdAtRaw : null;
 
@@ -935,6 +949,7 @@ export default function Page() {
   const [roleMap, setRoleMap] = useState<Record<string, UserRole>>({});
   const [roleTargetEmail, setRoleTargetEmail] = useState("");
   const [roleTargetValue, setRoleTargetValue] = useState<UserRole>("viewer");
+  const [roleEditDraftMap, setRoleEditDraftMap] = useState<Record<string, UserRole>>({});
   const [roleManageNotice, setRoleManageNotice] = useState("");
   const [roleManageLoading, setRoleManageLoading] = useState(false);
   const [healthCheckLoading, setHealthCheckLoading] = useState(false);
@@ -953,6 +968,7 @@ export default function Page() {
   const [invoiceBuyer, setInvoiceBuyer] = useState("");
   const [invoicePhone, setInvoicePhone] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
+  const [invoiceTaxEnabled, setInvoiceTaxEnabled] = useState(false);
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
   const [invoiceIncludeBankAccount, setInvoiceIncludeBankAccount] = useState(true);
   const [invoiceAddress, setInvoiceAddress] = useState("");
@@ -1059,6 +1075,39 @@ export default function Page() {
     });
   }, []);
 
+  const syncCurrentUserRoleFromServer = useCallback(async () => {
+    if (!sessionUser) return;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) return;
+
+      const response = await fetch("/api/my-role", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`
+        }
+      });
+      const payload = (await response.json()) as MyRoleApiResponse;
+      if (!response.ok || !payload.ok) return;
+      const nextRole = normalizeRole(payload.data?.role);
+
+      setRoleMap((prev) => {
+        const emailKey = normalizeEmail(sessionUser.email || "");
+        if (!emailKey || emailKey === normalizeEmail(FIXED_ADMIN_EMAIL)) return prev;
+        if (prev[emailKey] === nextRole) return prev;
+        return { ...prev, [emailKey]: nextRole };
+      });
+
+      setAuthUser((prev) => {
+        if (!prev) return prev;
+        if (prev.role === nextRole) return prev;
+        return { ...prev, role: nextRole };
+      });
+    } catch {
+      // keep current role state when server sync fails
+    }
+  }, [sessionUser]);
+
   const loadRecapRows = useCallback(async () => {
     try {
       const { data, error, status } = await supabase
@@ -1122,11 +1171,25 @@ export default function Page() {
   const loadInvoiceHistory = useCallback(async () => {
     setInvoiceHistoryLoading(true);
     try {
-      const { data, error, status } = await supabase
+      const primaryQuery = await supabase
         .from("sales_documents")
-        .select("id, public_token, document_no, document_type, invoice_date, buyer, subtotal, created_at")
+        .select("id, public_token, document_no, document_type, invoice_date, buyer, subtotal, grand_total, created_at")
         .order("created_at", { ascending: false })
         .limit(300);
+      let data: unknown[] | null = Array.isArray(primaryQuery.data) ? primaryQuery.data : null;
+      let error = primaryQuery.error;
+      let status = primaryQuery.status;
+
+      if (error && isMissingColumnError(error, "grand_total")) {
+        const legacyQuery = await supabase
+          .from("sales_documents")
+          .select("id, public_token, document_no, document_type, invoice_date, buyer, subtotal, created_at")
+          .order("created_at", { ascending: false })
+          .limit(300);
+        data = Array.isArray(legacyQuery.data) ? legacyQuery.data : null;
+        error = legacyQuery.error;
+        status = legacyQuery.status;
+      }
 
       if (error) {
         setInvoiceHistoryNotice(formatSupabaseError(`Memuat riwayat dokumen (status ${status || "-"})`, error));
@@ -1219,6 +1282,43 @@ export default function Page() {
     }
     void loadRoleMapFromSupabase();
   }, [loadRoleMapFromSupabase, sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser) return;
+
+    const refreshRoles = () => {
+      void loadRoleMapFromSupabase();
+    };
+
+    const timer = window.setInterval(refreshRoles, 5000);
+    window.addEventListener("focus", refreshRoles);
+    document.addEventListener("visibilitychange", refreshRoles);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshRoles);
+      document.removeEventListener("visibilitychange", refreshRoles);
+    };
+  }, [loadRoleMapFromSupabase, sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser) return;
+
+    const refreshCurrentRole = () => {
+      void syncCurrentUserRoleFromServer();
+    };
+
+    void syncCurrentUserRoleFromServer();
+    const timer = window.setInterval(refreshCurrentRole, 5000);
+    window.addEventListener("focus", refreshCurrentRole);
+    document.addEventListener("visibilitychange", refreshCurrentRole);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshCurrentRole);
+      document.removeEventListener("visibilitychange", refreshCurrentRole);
+    };
+  }, [sessionUser, syncCurrentUserRoleFromServer]);
 
   useEffect(() => {
     try {
@@ -1405,8 +1505,8 @@ export default function Page() {
   }
 
   async function handleSavePreset() {
-    if (authUser?.role === "viewer") {
-      setPresetNotice("Role viewer hanya bisa memakai preset yang sudah ada.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setPresetNotice("Role ini hanya bisa memakai preset yang sudah ada.");
       return;
     }
     const name = presetName.trim();
@@ -1448,8 +1548,8 @@ export default function Page() {
   }
 
   async function handleDeletePreset() {
-    if (authUser?.role === "viewer") {
-      setPresetNotice("Role viewer tidak punya izin menghapus preset.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setPresetNotice("Role ini tidak punya izin menghapus preset.");
       return;
     }
     if (!selectedPresetId) {
@@ -1476,8 +1576,8 @@ export default function Page() {
   }
 
   async function handleUpdatePreset() {
-    if (authUser?.role === "viewer") {
-      setPresetNotice("Role viewer tidak punya izin mengubah preset.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setPresetNotice("Role ini tidak punya izin mengubah preset.");
       return;
     }
     if (!selectedPresetId) {
@@ -1538,8 +1638,8 @@ export default function Page() {
   }
 
   function handleImportPresets(event: ChangeEvent<HTMLInputElement>) {
-    if (authUser?.role === "viewer") {
-      setPresetNotice("Role viewer tidak punya izin import preset.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setPresetNotice("Role ini tidak punya izin import preset.");
       if (importPresetRef.current) importPresetRef.current.value = "";
       return;
     }
@@ -1629,6 +1729,7 @@ export default function Page() {
     setInvoiceBuyer("");
     setInvoicePhone("");
     setInvoiceWhatsapp("");
+    setInvoiceTaxEnabled(false);
     setInvoiceIncludeBankAccount(true);
     setInvoiceCourier("");
     setInvoiceAddress("");
@@ -1646,6 +1747,15 @@ export default function Page() {
   const invoiceSubtotal = useMemo(
     () => invoiceItems.reduce((acc, item) => acc + Math.max(0, item.qty) * Math.max(0, item.harga), 0),
     [invoiceItems]
+  );
+  const invoiceTaxRate = 11;
+  const invoiceTaxAmount = useMemo(
+    () => (invoiceTaxEnabled ? Math.round((invoiceSubtotal * invoiceTaxRate) / 100) : 0),
+    [invoiceSubtotal, invoiceTaxEnabled]
+  );
+  const invoiceGrandTotal = useMemo(
+    () => invoiceSubtotal + invoiceTaxAmount,
+    [invoiceSubtotal, invoiceTaxAmount]
   );
   const filteredInvoiceHistory = useMemo(() => {
     const buyerNeedle = invoiceHistoryBuyerQuery.trim().toLowerCase();
@@ -1745,6 +1855,10 @@ export default function Page() {
           notes: invoiceNotes,
           items: normalizedItems,
           subtotal: invoiceSubtotal,
+          taxEnabled: invoiceTaxEnabled,
+          taxRate: invoiceTaxRate,
+          taxAmount: invoiceTaxAmount,
+          grandTotal: invoiceGrandTotal,
           markPrinted
         })
       });
@@ -1817,6 +1931,7 @@ export default function Page() {
     const docLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
     const docNoLabel = invoiceDocType === "faktur" ? "No Faktur" : "No Penawaran";
     const totalLabel = invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN";
+    const taxRateLabel = invoiceTaxRate.toFixed(2).replace(".", ",");
     const hasBuyerBox = Boolean(
       buyerValue || phoneValue || whatsappValue || addressValue || (invoiceDocType === "penawaran" && salesPicValue)
     );
@@ -1924,10 +2039,18 @@ export default function Page() {
             <tbody>${rows}</tbody>
           </table>
 
-          <div class="total">${totalLabel}: ${rupiah(invoiceSubtotal)}</div>
+          ${
+            invoiceTaxEnabled
+              ? `<div style="margin-top:8px;display:grid;gap:3px;font-size:10px;">
+                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal</span><strong>${rupiah(invoiceSubtotal)}</strong></div>
+                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>PPN (${taxRateLabel}%)</span><strong>${rupiah(invoiceTaxAmount)}</strong></div>
+                </div>`
+              : ""
+          }
+          <div class="total">${totalLabel}: ${rupiah(invoiceGrandTotal)}</div>
           <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
           ${
-            showBankAccount
+            showBankAccount && invoiceDocType === "faktur"
               ? `<div class="bank-section"><div class="bank-label">Rekening Pembayaran:</div><div>${bankAccountHtml}</div></div>`
               : ""
           }
@@ -1937,7 +2060,11 @@ export default function Page() {
                   <div class="terms-title">KETERANGAN :</div>
                   <div>* Barang yang sudah dibeli tidak bisa dikembalikan.</div>
                   <div>* Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</div>
-                  <div>* Harga diatas sudah termasuk Faktur Pajak.</div>
+                  ${
+                    invoiceTaxEnabled
+                      ? `<div>* Harga diatas sudah termasuk Faktur Pajak.</div>`
+                      : ""
+                  }
                   <div>* Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</div>
                   <div class="terms-closing">Terima kasih atas kepercayaan Anda.</div>
                 </div>`
@@ -1946,9 +2073,13 @@ export default function Page() {
           ${
             invoiceDocType === "penawaran"
               ? `<div class="terms">
-                  <div class="terms-title">Syarat dan Ketentuan:</div>
-                  <ol class="terms-list">
-                    <li>Harga diatas sudah termasuk Faktur Pajak.</li>
+                <div class="terms-title">Syarat dan Ketentuan:</div>
+                <ol class="terms-list">
+                    ${
+                      invoiceTaxEnabled
+                        ? "<li>Harga diatas sudah termasuk Faktur Pajak.</li>"
+                        : ""
+                    }
                     <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
                     <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
                     <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>
@@ -2012,7 +2143,8 @@ export default function Page() {
   function getDocumentShareUrl(publicToken: string) {
     const params = new URLSearchParams({
       includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
-      includeBank: invoiceIncludeBankAccount ? "1" : "0"
+      includeBank: invoiceIncludeBankAccount ? "1" : "0",
+      includeTax: invoiceTaxEnabled ? "1" : "0"
     });
     return `${window.location.origin}/dokumen/${publicToken}?${params.toString()}`;
   }
@@ -2071,7 +2203,8 @@ export default function Page() {
       "*Rincian Barang:*",
       ...lines,
       "",
-      `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceSubtotal)}*`,
+      ...(invoiceTaxEnabled ? [`Subtotal: ${rupiah(invoiceSubtotal)}`, `PPN ${invoiceTaxRate}%: ${rupiah(invoiceTaxAmount)}`] : []),
+      `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceGrandTotal)}*`,
       `Catatan: ${invoiceNotes || "-"}`,
       `Link dokumen: ${getDocumentShareUrl(savedDoc.publicToken)}`
     ].join("\n");
@@ -2206,6 +2339,7 @@ export default function Page() {
       setInvoiceAddress(detail.address || "");
       setInvoiceCourier(detail.courier || "");
       setInvoiceNotes(detail.notes || "");
+      setInvoiceTaxEnabled(Boolean(detail.taxEnabled));
       setInvoiceItems(nextItems);
       setInvoiceSaveNotice(`Dokumen ${detail.documentNo} dimuat ke form. Kamu bisa edit lalu simpan/cetak ulang.`);
       return true;
@@ -2241,9 +2375,13 @@ export default function Page() {
       setInvoiceSaveNotice("Role viewer tidak punya izin cetak ulang dokumen.");
       return;
     }
-    const url = `/dokumen/${publicToken}?autoprint=1&includeSign=${invoiceIncludeSignAndStamp ? "1" : "0"}&includeBank=${
-      invoiceIncludeBankAccount ? "1" : "0"
-    }`;
+    const params = new URLSearchParams({
+      autoprint: "1",
+      includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
+      includeBank: invoiceIncludeBankAccount ? "1" : "0",
+      includeTax: invoiceTaxEnabled ? "1" : "0"
+    });
+    const url = `/dokumen/${publicToken}?${params.toString()}`;
     window.open(url, "_blank");
   }
 
@@ -2368,9 +2506,46 @@ export default function Page() {
     }
 
     setRoleMap((prev) => ({ ...prev, [emailKey]: normalizeRole(roleTargetValue) }));
-    setRoleManageNotice(`Role untuk ${emailKey} disimpan sebagai ${roleTargetValue}.`);
+    await loadRoleMapFromSupabase();
+    setRoleManageNotice(`Role untuk ${emailKey} disimpan sebagai ${roleTargetValue.replace(/_/g, " ")}.`);
     setRoleTargetEmail("");
     setRoleTargetValue("viewer");
+    setRoleManageLoading(false);
+  }
+
+  async function handleUpdateRole(email: string, nextRoleRaw: UserRole) {
+    const emailKey = normalizeEmail(email);
+    if (!emailKey) return;
+    if (emailKey === normalizeEmail(FIXED_ADMIN_EMAIL)) {
+      setRoleManageNotice("Email admin utama sudah otomatis role admin.");
+      return;
+    }
+
+    const nextRole = normalizeRole(nextRoleRaw);
+    if (nextRole === "admin") {
+      setRoleManageNotice("Role admin hanya untuk email admin utama.");
+      return;
+    }
+
+    setRoleManageLoading(true);
+    const { error } = await supabase
+      .from(USER_ROLE_TABLE)
+      .upsert([{ email: emailKey, role: nextRole }], { onConflict: "email" });
+
+    if (error) {
+      setRoleManageNotice(`Gagal update role: ${error.message}`);
+      setRoleManageLoading(false);
+      return;
+    }
+
+    setRoleMap((prev) => ({ ...prev, [emailKey]: nextRole }));
+    await loadRoleMapFromSupabase();
+    setRoleEditDraftMap((prev) => {
+      const next = { ...prev };
+      delete next[emailKey];
+      return next;
+    });
+    setRoleManageNotice(`Role untuk ${emailKey} berhasil diubah ke ${nextRole.replace(/_/g, " ")}.`);
     setRoleManageLoading(false);
   }
 
@@ -2391,6 +2566,7 @@ export default function Page() {
       delete next[emailKey];
       return next;
     });
+    await loadRoleMapFromSupabase();
     setRoleManageNotice(`Role ${emailKey} direset ke viewer (default).`);
     setRoleManageLoading(false);
   }
@@ -2529,8 +2705,8 @@ export default function Page() {
   }
 
   async function addRecapRow() {
-    if (authUser?.role === "viewer") {
-      setRecapNotice("Role viewer hanya bisa melihat data rekap.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setRecapNotice("Role ini hanya bisa melihat data rekap.");
       return false;
     }
     if (isRecapSaving) return false;
@@ -2704,8 +2880,8 @@ export default function Page() {
   }
 
   function openEditRecap(row: SalesRecapRow) {
-    if (authUser?.role === "viewer") {
-      setRecapNotice("Role viewer tidak punya izin mengubah data.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setRecapNotice("Role ini tidak punya izin mengubah data rekap.");
       return;
     }
     if (editRecapDraft?.id === row.id) {
@@ -2836,9 +3012,9 @@ export default function Page() {
   }
 
   async function saveEditRecap() {
-    if (authUser?.role === "viewer") {
-      setRecapNotice("Role viewer tidak punya izin mengubah data.");
-      setEditRecapNotice("Role viewer tidak punya izin mengubah data.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setRecapNotice("Role ini tidak punya izin mengubah data rekap.");
+      setEditRecapNotice("Role ini tidak punya izin mengubah data rekap.");
       return;
     }
     if (isEditRecapSaving) return;
@@ -2951,8 +3127,8 @@ export default function Page() {
   }
 
   async function toggleRecapCancelStatus(row: SalesRecapRow) {
-    if (authUser?.role === "viewer") {
-      setRecapNotice("Role viewer tidak punya izin mengubah status transaksi.");
+    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
+      setRecapNotice("Role ini tidak punya izin mengubah status transaksi.");
       return;
     }
     if (cancelStatusSaving) return;
@@ -3896,7 +4072,7 @@ export default function Page() {
   const activeMeta = sectionMeta[activeSection];
   const currentRole = authUser?.role ?? null;
   const allowedSections = currentRole ? ROLE_SECTION_ACCESS[currentRole] : [];
-  const canManageDocuments = currentRole === "admin" || currentRole === "staff";
+  const canManageDocuments = currentRole === "admin" || currentRole === "staff" || currentRole === "staff_offline";
   const canManageRecap = currentRole === "admin" || currentRole === "staff";
   const canDeleteRecap = currentRole === "admin";
   const canManagePreset = currentRole === "admin" || currentRole === "staff";
@@ -4014,7 +4190,7 @@ export default function Page() {
                 Login: <strong className="text-slate-900">{authUser.email}</strong>
               </p>
               <p>
-                Role: <strong className="uppercase text-slate-900">{authUser.role}</strong>
+                Role: <strong className="uppercase text-slate-900">{authUser.role.replace(/_/g, " ")}</strong>
               </p>
               <button
                 type="button"
@@ -4207,6 +4383,7 @@ export default function Page() {
                 >
                   <option value="viewer">viewer</option>
                   <option value="staff">staff</option>
+                  <option value="staff_offline">staff offline</option>
                 </select>
                 <button
                   type="button"
@@ -4224,17 +4401,44 @@ export default function Page() {
                   <strong className="uppercase text-emerald-700">admin</strong>
                 </div>
                 {roleEntries.map(([email, role]) => (
-                  <div key={`role-${email}`} className="flex items-center gap-1 rounded-xl border border-stone-200 bg-white px-2 py-1.5 text-[11px]">
-                    <span className="flex-1 truncate text-slate-700">{email}</span>
-                    <strong className="uppercase text-slate-900">{role}</strong>
-                    <button
-                      type="button"
-                      onClick={() => handleResetRole(email)}
-                      disabled={roleManageLoading}
-                      className="rounded-lg border border-stone-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
-                    >
-                      Reset
-                    </button>
+                  <div key={`role-${email}`} className="rounded-xl border border-stone-200 bg-white px-2 py-1.5 text-[11px]">
+                    <div className="mb-1 flex items-center gap-1">
+                      <span className="flex-1 truncate text-slate-700">{email}</span>
+                      <strong className="uppercase text-slate-900">{role.replace(/_/g, " ")}</strong>
+                    </div>
+                    <div className="grid gap-1 sm:grid-cols-[1fr_auto_auto]">
+                      <select
+                        value={roleEditDraftMap[email] ?? role}
+                        onChange={(e) =>
+                          setRoleEditDraftMap((prev) => ({
+                            ...prev,
+                            [email]: normalizeRole(e.target.value)
+                          }))
+                        }
+                        disabled={roleManageLoading}
+                        className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 text-[10px] text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                      >
+                        <option value="viewer">viewer</option>
+                        <option value="staff">staff</option>
+                        <option value="staff_offline">staff offline</option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateRole(email, roleEditDraftMap[email] ?? role)}
+                        disabled={roleManageLoading || (roleEditDraftMap[email] ?? role) === role}
+                        className="rounded-lg border border-stone-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        Simpan
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleResetRole(email)}
+                        disabled={roleManageLoading}
+                        className="rounded-lg border border-stone-300 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        Reset
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -4891,7 +5095,15 @@ export default function Page() {
                     );
                   })}
                 </div>
-                <div className="mt-2 flex justify-end text-sm font-semibold text-slate-800">Subtotal: {rupiah(invoiceSubtotal)}</div>
+                <div className="mt-2 grid gap-1 text-sm text-slate-700">
+                  <div className="flex justify-end font-semibold text-slate-800">Subtotal: {rupiah(invoiceSubtotal)}</div>
+                  {invoiceTaxEnabled ? (
+                    <div className="flex justify-end">PPN {invoiceTaxRate}%: {rupiah(invoiceTaxAmount)}</div>
+                  ) : null}
+                  <div className="flex justify-end font-bold text-slate-900">
+                    Total: {rupiah(invoiceGrandTotal)}
+                  </div>
+                </div>
               </div>
 
               <label className="grid gap-1.5 text-sm text-slate-600">
@@ -4908,6 +5120,15 @@ export default function Page() {
                     className="h-4 w-4 accent-stone-700"
                   />
                   <span>Tampilkan TTD & Cap</span>
+                </label>
+                <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={invoiceTaxEnabled}
+                    onChange={(e) => setInvoiceTaxEnabled(e.target.checked)}
+                    className="h-4 w-4 accent-stone-700"
+                  />
+                  <span>Terapkan PPN 11%</span>
                 </label>
                 <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
                   <input
@@ -5196,7 +5417,7 @@ export default function Page() {
           {recapNotice ? <p className="mb-3 text-xs text-slate-600">{recapNotice}</p> : null}
           {!canManageRecap ? (
             <p className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-700">
-              Akun role `viewer` hanya bisa melihat hasil rekap.
+              Akun role ini hanya bisa melihat hasil rekap.
             </p>
           ) : null}
           <div className="mb-4 grid gap-2 sm:w-fit sm:grid-cols-2">
@@ -6301,3 +6522,7 @@ export default function Page() {
     </main>
   );
 }
+
+
+
+

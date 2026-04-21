@@ -24,6 +24,10 @@ type SalesDocumentRequest = {
   notes?: string;
   items?: SalesDocumentItem[];
   subtotal?: number;
+  taxEnabled?: boolean;
+  taxRate?: number;
+  taxAmount?: number;
+  grandTotal?: number;
   markPrinted?: boolean;
 };
 
@@ -67,6 +71,14 @@ function getPublicAppOrigin(request: NextRequest) {
   }
 }
 
+function isMissingTaxColumnError(message: string) {
+  const text = message.toLowerCase();
+  return (
+    (text.includes("schema cache") || text.includes("column")) &&
+    (text.includes("grand_total") || text.includes("tax_enabled") || text.includes("tax_rate") || text.includes("tax_amount"))
+  );
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as SalesDocumentRequest;
@@ -77,6 +89,13 @@ export async function POST(request: NextRequest) {
     const validUntil = normalizeIsoDate(body.validUntil || null);
     const items = normalizeItems(body.items);
     const subtotal = Math.max(0, Math.round(Number(body.subtotal) || 0));
+    const taxEnabled = Boolean(body.taxEnabled);
+    const taxRate = Math.max(0, Number(body.taxRate) || 11);
+    const taxAmount = taxEnabled ? Math.max(0, Math.round(Number(body.taxAmount) || 0)) : 0;
+    const grandTotal = Math.max(
+      0,
+      Math.round(Number(body.grandTotal) || subtotal + taxAmount)
+    );
     const markPrinted = Boolean(body.markPrinted);
 
     if (!publicToken) {
@@ -111,7 +130,7 @@ export async function POST(request: NextRequest) {
       throw new Error(`Gagal cek dokumen: ${findError.message}`);
     }
 
-    const payload = {
+    const payloadBase = {
       public_token: publicToken,
       document_no: documentNo,
       document_type: documentType,
@@ -128,25 +147,50 @@ export async function POST(request: NextRequest) {
       subtotal,
       last_printed_at: markPrinted ? new Date().toISOString() : null
     };
+    const payloadWithTax = {
+      ...payloadBase,
+      tax_enabled: taxEnabled,
+      tax_rate: taxRate,
+      tax_amount: taxAmount,
+      grand_total: grandTotal
+    };
 
     if (existing?.id) {
       const nextPrintCount = markPrinted ? Math.max(0, Number(existing.print_count) || 0) + 1 : existing.print_count;
-      const { error: updateError } = await supabaseAdmin
+      let { error: updateError } = await supabaseAdmin
         .from("sales_documents")
         .update({
-          ...payload,
+          ...payloadWithTax,
           print_count: nextPrintCount
         })
         .eq("id", existing.id);
+      if (updateError && isMissingTaxColumnError(updateError.message || "")) {
+        const legacyRetry = await supabaseAdmin
+          .from("sales_documents")
+          .update({
+            ...payloadBase,
+            print_count: nextPrintCount
+          })
+          .eq("id", existing.id);
+        updateError = legacyRetry.error;
+      }
       if (updateError) {
         throw new Error(`Gagal update dokumen: ${updateError.message}`);
       }
     } else {
-      const { error: insertError } = await supabaseAdmin.from("sales_documents").insert({
-        ...payload,
+      let { error: insertError } = await supabaseAdmin.from("sales_documents").insert({
+        ...payloadWithTax,
         print_count: markPrinted ? 1 : 0,
         created_by: authUserId
       });
+      if (insertError && isMissingTaxColumnError(insertError.message || "")) {
+        const legacyRetry = await supabaseAdmin.from("sales_documents").insert({
+          ...payloadBase,
+          print_count: markPrinted ? 1 : 0,
+          created_by: authUserId
+        });
+        insertError = legacyRetry.error;
+      }
       if (insertError) {
         throw new Error(`Gagal simpan dokumen: ${insertError.message}`);
       }
