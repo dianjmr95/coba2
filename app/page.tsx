@@ -1019,6 +1019,7 @@ export default function Page() {
   const [recapRows, setRecapRows] = useState<SalesRecapRow[]>([]);
   const [recapFilterMarketplace, setRecapFilterMarketplace] = useState<"Semua" | SalesRecapRow["marketplace"]>("Semua");
   const [recapFilterStatus, setRecapFilterStatus] = useState<"Semua" | SalesRecapRow["status"]>("Semua");
+  const [recapFilterLaba, setRecapFilterLaba] = useState<"Semua" | "rugi" | "tidak_rugi">("Semua");
   const [recapFilterStartDate, setRecapFilterStartDate] = useState("");
   const [recapFilterEndDate, setRecapFilterEndDate] = useState("");
   const [recapFilterQuery, setRecapFilterQuery] = useState("");
@@ -3491,15 +3492,22 @@ export default function Page() {
     return recapRows.filter((row) => {
       const passMarketplace = recapFilterMarketplace === "Semua" ? true : row.marketplace === recapFilterMarketplace;
       const passStatus = recapFilterStatus === "Semua" ? true : row.status === recapFilterStatus;
+      const labaFinalTransaksi = row.omzet - row.modal - row.ongkir - row.nominalCancel;
+      const passLaba =
+        recapFilterLaba === "Semua"
+          ? true
+          : recapFilterLaba === "rugi"
+            ? labaFinalTransaksi < 0
+            : labaFinalTransaksi >= 0;
       const passStartDate = recapFilterStartDate ? row.tanggal >= recapFilterStartDate : true;
       const passEndDate = recapFilterEndDate ? row.tanggal <= recapFilterEndDate : true;
       const passQuery = query
         ? `${row.noPesanan} ${row.pelanggan} ${row.catatan} ${row.alasanCancel} ${row.nominalCancel}`.toLowerCase().includes(query)
         : true;
 
-      return passMarketplace && passStatus && passStartDate && passEndDate && passQuery;
+      return passMarketplace && passStatus && passLaba && passStartDate && passEndDate && passQuery;
     });
-  }, [recapRows, recapFilterMarketplace, recapFilterStatus, recapFilterStartDate, recapFilterEndDate, recapFilterQuery]);
+  }, [recapRows, recapFilterMarketplace, recapFilterStatus, recapFilterLaba, recapFilterStartDate, recapFilterEndDate, recapFilterQuery]);
 
   const recapSummary = useMemo(() => {
     const suksesRows = filteredRecapRows.filter((r) => r.status === "sukses");
@@ -5698,6 +5706,7 @@ export default function Page() {
                   setRecapFilterEndDate("");
                   setRecapFilterMarketplace("Semua");
                   setRecapFilterStatus("Semua");
+                  setRecapFilterLaba("Semua");
                   setRecapFilterQuery("");
                 }}
                 className="rounded-xl border border-stone-300 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
@@ -5705,7 +5714,7 @@ export default function Page() {
                 Reset Filter
               </button>
             </div>
-            <div className="grid gap-2 md:grid-cols-5">
+            <div className="grid gap-2 md:grid-cols-6">
               <label className="grid gap-1 text-xs text-slate-600">
                 <span>Dari Tanggal</span>
                 <input type="date" value={recapFilterStartDate} onChange={(e) => setRecapFilterStartDate(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
@@ -5729,6 +5738,14 @@ export default function Page() {
                   <option value="Semua">Semua Status</option>
                   <option value="sukses">Sukses</option>
                   <option value="cancel">Cancel</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-slate-600">
+                <span>Laba</span>
+                <select value={recapFilterLaba} onChange={(e) => setRecapFilterLaba(e.target.value as "Semua" | "rugi" | "tidak_rugi")} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200">
+                  <option value="Semua">Semua Laba</option>
+                  <option value="rugi">Rugi (Minus)</option>
+                  <option value="tidak_rugi">Tidak Rugi (&gt;= 0)</option>
                 </select>
               </label>
               <label className="grid gap-1 text-xs text-slate-600">
