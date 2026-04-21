@@ -2,6 +2,8 @@ import { getSupabaseAdmin } from "../../../lib/supabaseAdmin";
 import AutoPrintTrigger from "./AutoPrintTrigger";
 import PrintActions from "./PrintActions";
 
+const DEFAULT_BANK_ACCOUNT_INFO = "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA";
+
 type DocumentItem = {
   nama: string;
   qty: number;
@@ -14,6 +16,7 @@ type DocumentRow = {
   valid_until: string | null;
   buyer: string;
   phone: string;
+  whatsapp: string;
   address: string;
   courier: string;
   sales_pic: string;
@@ -59,12 +62,15 @@ export default async function DokumenPage({
   searchParams
 }: {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ autoprint?: string }>;
+  searchParams: Promise<{ autoprint?: string; includeSign?: string; includeBank?: string }>;
 }) {
   const { token } = await params;
   const query = await searchParams;
   const publicToken = String(token || "").trim();
   const shouldAutoPrint = String(query?.autoprint || "").trim() === "1";
+  const includeSignAndStamp = String(query?.includeSign || "1").trim() !== "0";
+  const includeBankAccount = String(query?.includeBank || "").trim() === "1";
+  const bankInfoValue = DEFAULT_BANK_ACCOUNT_INFO.trim();
   if (!publicToken) {
     return (
       <main className="mx-auto min-h-screen max-w-4xl bg-white px-4 py-8 text-slate-900">
@@ -83,7 +89,7 @@ export default async function DokumenPage({
     const result = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "document_no, document_type, invoice_date, valid_until, buyer, phone, address, courier, sales_pic, notes, items, subtotal"
+        "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
@@ -126,6 +132,13 @@ export default async function DokumenPage({
   const docNoLabel = isPenawaran ? "No Penawaran" : "No Faktur";
   const totalLabel = isPenawaran ? "TOTAL PENAWARAN" : "TOTAL";
   const total = Number(data.subtotal) || items.reduce((acc, item) => acc + item.qty * item.harga, 0);
+  const buyerValue = String(data.buyer || "").trim();
+  const phoneValue = String(data.phone || "").trim();
+  const whatsappValue = String(data.whatsapp || "").trim();
+  const addressValue = String(data.address || "").trim();
+  const courierValue = String(data.courier || "").trim();
+  const salesPicValue = String(data.sales_pic || "").trim();
+  const hasBuyerBox = Boolean(buyerValue || phoneValue || whatsappValue || addressValue || (isPenawaran && salesPicValue));
 
   return (
     <main className="mx-auto min-h-screen max-w-4xl bg-white px-4 py-8 text-slate-900">
@@ -136,13 +149,16 @@ export default async function DokumenPage({
           @media print {
             @page { size: A4; margin: 12mm; }
           }
-          .sheet .header { display: flex; gap: 10px; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
-          .sheet .logo { width: 90px; height: auto; object-fit: contain; }
-          .sheet .company h1 { margin: 0; font-size: 26px; letter-spacing: 0.02em; line-height: 1.02; }
-          .sheet .company p { margin: 1px 0 0; color: #222; font-size: 10px; }
-          .sheet .company .address { margin-top: 3px; font-size: 9px; line-height: 1.35; max-width: 430px; color: #333; }
+          .sheet .header { display: flex; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
+          .sheet .company { width: 50%; padding-right: 8px; }
+          .sheet .logo-wrap { width: 50%; display: flex; justify-content: flex-end; }
+          .sheet .logo { width: 220px; max-width: 100%; height: auto; object-fit: contain; }
+          .sheet .company h1 { margin: 0; font-size: 28px; letter-spacing: 0.015em; line-height: 1.02; }
+          .sheet .company p { margin: 1px 0 0; color: #222; font-size: 10px; line-height: 1.25; }
+          .sheet .company .address { margin-top: 2px; font-size: 9px; line-height: 1.3; max-width: 500px; color: #333; }
           .sheet .title { margin: 10px 0 8px; text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 0.11em; }
           .sheet .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+          .sheet .meta.single { grid-template-columns: 1fr; }
           .sheet .box { border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 68px; }
           .sheet .box p { margin: 0 0 3px; font-size: 10px; }
           .sheet .doc-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
@@ -155,36 +171,48 @@ export default async function DokumenPage({
           .sheet .terms-title { font-weight: 700; margin-bottom: 4px; }
           .sheet .terms-list { margin: 0; padding-left: 16px; }
           .sheet .terms-closing { margin-top: 8px; }
+          .sheet .bank-section { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.45; }
+          .sheet .bank-box { margin-top: 8px; border-top: 1px dashed #bbb; padding-top: 6px; line-height: 1.45; }
+          .sheet .bank-label { font-weight: 700; }
           .sheet .sign { margin-top: 30px; display: flex; justify-content: flex-end; }
-          .sheet .sign-box { width: 160px; text-align: center; font-size: 10px; }
-          .sheet .sign-space { height: 52px; }
+          .sheet .sign-box { width: 180px; text-align: center; font-size: 10px; position: relative; }
+          .sheet .sign-space { height: 74px; position: relative; }
+          .sheet .sign-space.no-visual { height: 74px; }
+          .sheet .stamp { position: absolute; left: 50%; top: 2px; width: 132px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
+          .sheet .signature { position: absolute; left: 50%; top: 17px; width: 106px; transform: translateX(-50%); z-index: 1; }
         `}</style>
 
         <div className="header">
-          <img src="/starcomp-logo.png" alt="Logo Starcomp" className="logo" />
           <div className="company">
             <h1>STARCOMP SOLO</h1>
             <p>Computer Store</p>
             <p>{isPenawaran ? "Dokumen Penawaran Barang" : "Faktur Penjualan Resmi"}</p>
             <p className="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+            <p>No. Telp/WA: 08112642352</p>
+          </div>
+          <div className="logo-wrap">
+            <img src="/starcomp-logo.png" alt="Logo Starcomp" className="logo" />
           </div>
         </div>
 
         <h2 className="title">{docTitle}</h2>
 
-        <div className="meta">
+        <div className={`meta${hasBuyerBox ? "" : " single"}`}>
           <div className="box">
             <p><strong>{docNoLabel}:</strong> {data.document_no}</p>
             <p><strong>Tanggal Cetak:</strong> {formatDate(data.invoice_date)}</p>
             {isPenawaran ? <p><strong>Berlaku Sampai:</strong> {formatDate(data.valid_until)}</p> : null}
-            <p><strong>Kurir:</strong> {data.courier || "-"}</p>
+            {courierValue ? <p><strong>Kurir:</strong> {courierValue}</p> : null}
           </div>
-          <div className="box">
-            <p><strong>Pembeli:</strong> {data.buyer || "-"}</p>
-            <p><strong>Telepon:</strong> {data.phone || "-"}</p>
-            <p><strong>Alamat:</strong> {data.address || "-"}</p>
-            {isPenawaran ? <p><strong>PIC Sales:</strong> {data.sales_pic || "-"}</p> : null}
-          </div>
+          {hasBuyerBox ? (
+            <div className="box">
+              {buyerValue ? <p><strong>Pembeli:</strong> {buyerValue}</p> : null}
+              {phoneValue ? <p><strong>Telepon:</strong> {phoneValue}</p> : null}
+              {whatsappValue ? <p><strong>WhatsApp:</strong> {whatsappValue}</p> : null}
+              {addressValue ? <p><strong>Alamat:</strong> {addressValue}</p> : null}
+              {isPenawaran && salesPicValue ? <p><strong>PIC Sales:</strong> {salesPicValue}</p> : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="overflow-x-auto">
@@ -229,9 +257,21 @@ export default async function DokumenPage({
         <div className="notes">
           <strong>Catatan:</strong> {data.notes || "-"}
         </div>
+        {includeBankAccount && bankInfoValue ? (
+          <div className="bank-section">
+            <div className="bank-label">Rekening Pembayaran:</div>
+            {bankInfoValue.split("\n").map((line, index) => (
+              <div key={`bank-section-${index}`}>{line}</div>
+            ))}
+          </div>
+        ) : null}
         {!isPenawaran ? (
           <div className="terms">
-            <div>Barang yang sudah dibeli tidak bisa dikembalikan.</div>
+            <div className="terms-title">KETERANGAN :</div>
+            <div>* Barang yang sudah dibeli tidak bisa dikembalikan.</div>
+            <div>* Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</div>
+            <div>* Harga diatas sudah termasuk Faktur Pajak.</div>
+            <div>* Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</div>
             <div className="terms-closing">Terima kasih atas kepercayaan Anda.</div>
           </div>
         ) : null}
@@ -239,11 +279,21 @@ export default async function DokumenPage({
           <div className="terms">
             <div className="terms-title">Syarat dan Ketentuan:</div>
             <ol className="terms-list">
-              <li>Harga di atas sudah termasuk PPN 11%.</li>
+              <li>Harga diatas sudah termasuk Faktur Pajak.</li>
+              <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
               <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
               <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>
-              <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
+              <li>Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</li>
+              <li>Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</li>
             </ol>
+            {includeBankAccount && bankInfoValue ? (
+              <div className="bank-box">
+                <span className="bank-label">Rekening Pembayaran:</span>
+                {bankInfoValue.split("\n").map((line, index) => (
+                  <div key={`bank-info-${index}`}>{line}</div>
+                ))}
+              </div>
+            ) : null}
             <div className="terms-closing">
               Demikian surat penawaran ini kami sampaikan. Atas perhatian dan kerjasamanya, kami ucapkan terima kasih.
             </div>
@@ -252,7 +302,10 @@ export default async function DokumenPage({
         <div className="sign">
           <div className="sign-box">
             <div>Hormat kami,</div>
-            <div className="sign-space" />
+            <div className={`sign-space ${includeSignAndStamp ? "" : "no-visual"}`}>
+              {includeSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="stamp" /> : null}
+              {includeSignAndStamp ? <img src="/signature-starcomp.png" alt="Tanda tangan" className="signature" /> : null}
+            </div>
             <div><strong>STARCOMP SOLO</strong></div>
           </div>
         </div>

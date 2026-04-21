@@ -181,6 +181,7 @@ const NAV_VISIBILITY_STORAGE_KEY = "starcomp-nav-hidden-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
 const PRESET_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_PRESET_TABLE || "potongan_presets";
 const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
+const DEFAULT_BANK_ACCOUNT_INFO = "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA";
 const ORDER_ITEMS_FEATURE_START_DATE = "2026-04-18";
 const ENABLE_AUTO_PRICE_FETCH = String(process.env.NEXT_PUBLIC_ENABLE_AUTO_PRICE_FETCH || "").toLowerCase() === "true";
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
@@ -952,6 +953,8 @@ export default function Page() {
   const [invoiceBuyer, setInvoiceBuyer] = useState("");
   const [invoicePhone, setInvoicePhone] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
+  const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
+  const [invoiceIncludeBankAccount, setInvoiceIncludeBankAccount] = useState(true);
   const [invoiceAddress, setInvoiceAddress] = useState("");
   const [invoiceCourier, setInvoiceCourier] = useState("");
   const [invoiceNotes, setInvoiceNotes] = useState("");
@@ -1626,6 +1629,7 @@ export default function Page() {
     setInvoiceBuyer("");
     setInvoicePhone("");
     setInvoiceWhatsapp("");
+    setInvoiceIncludeBankAccount(true);
     setInvoiceCourier("");
     setInvoiceAddress("");
     setInvoiceNotes("");
@@ -1787,6 +1791,16 @@ export default function Page() {
       .join("");
 
     const logoUrl = `${window.location.origin}/starcomp-logo.png`;
+    const signatureUrl = `${window.location.origin}/signature-starcomp.png`;
+    const buyerValue = invoiceBuyer.trim();
+    const phoneValue = invoicePhone.trim();
+    const whatsappValue = invoiceWhatsapp.trim();
+    const addressValue = invoiceAddress.trim();
+    const courierValue = invoiceCourier.trim();
+    const salesPicValue = invoiceSalesPic.trim();
+    const bankAccountValue = DEFAULT_BANK_ACCOUNT_INFO.trim();
+    const showBankAccount = invoiceIncludeBankAccount && Boolean(bankAccountValue);
+    const bankAccountHtml = bankAccountValue.replace(/\n/g, "<br />");
     const printDate = new Intl.DateTimeFormat("id-ID", {
       day: "2-digit",
       month: "2-digit",
@@ -1803,6 +1817,13 @@ export default function Page() {
     const docLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
     const docNoLabel = invoiceDocType === "faktur" ? "No Faktur" : "No Penawaran";
     const totalLabel = invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN";
+    const hasBuyerBox = Boolean(
+      buyerValue || phoneValue || whatsappValue || addressValue || (invoiceDocType === "penawaran" && salesPicValue)
+    );
+    const signVisuals = invoiceIncludeSignAndStamp
+      ? `<img class="stamp" src="${logoUrl}" alt="Cap Starcomp" />
+                <img class="signature" src="${signatureUrl}" alt="Tanda tangan" />`
+      : "";
     const html = `<!doctype html>
     <html>
       <head>
@@ -1812,13 +1833,16 @@ export default function Page() {
           @page { size: A4; margin: 12mm; }
           body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 11px; }
           .sheet { max-width: 760px; margin: 0 auto; }
-          .header { display: flex; gap: 10px; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
-          .logo { width: 90px; height: auto; object-fit: contain; }
-          .company h1 { margin: 0; font-size: 26px; letter-spacing: 0.02em; line-height: 1.02; }
-          .company p { margin: 1px 0 0; color: #222; font-size: 10px; }
-          .company .address { margin-top: 3px; font-size: 9px; line-height: 1.35; max-width: 430px; color: #333; }
+          .header { display: flex; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
+          .company { width: 50%; padding-right: 8px; }
+          .logo-wrap { width: 50%; display: flex; justify-content: flex-end; }
+          .logo { width: 220px; max-width: 100%; height: auto; object-fit: contain; }
+          .company h1 { margin: 0; font-size: 28px; letter-spacing: 0.015em; line-height: 1.02; }
+          .company p { margin: 1px 0 0; color: #222; font-size: 10px; line-height: 1.25; }
+          .company .address { margin-top: 2px; font-size: 9px; line-height: 1.3; max-width: 500px; color: #333; }
           .title { margin: 10px 0 8px; text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 0.11em; }
           .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+          .meta.single { grid-template-columns: 1fr; }
           .box { border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 68px; }
           .box p { margin: 0 0 3px; font-size: 10px; }
           table { width: 100%; border-collapse: collapse; margin-top: 4px; }
@@ -1831,26 +1855,35 @@ export default function Page() {
           .terms-title { font-weight: 700; margin-bottom: 4px; }
           .terms-list { margin: 0; padding-left: 16px; }
           .terms-closing { margin-top: 8px; }
+          .bank-section { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.45; }
+          .bank-box { margin-top: 8px; border-top: 1px dashed #bbb; padding-top: 6px; line-height: 1.45; }
+          .bank-label { font-weight: 700; }
           .sign { margin-top: 30px; display: flex; justify-content: flex-end; }
-          .sign-box { width: 160px; text-align: center; font-size: 10px; }
-          .sign-space { height: 52px; }
+          .sign-box { width: 180px; text-align: center; font-size: 10px; position: relative; }
+          .sign-space { height: 74px; position: relative; }
+          .sign-space.no-visual { height: 74px; }
+          .stamp { position: absolute; left: 50%; top: 2px; width: 132px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
+          .signature { position: absolute; left: 50%; top: 17px; width: 106px; transform: translateX(-50%); z-index: 1; }
         </style>
       </head>
       <body>
         <div class="sheet">
           <div class="header">
-            <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
             <div class="company">
               <h1>STARCOMP SOLO</h1>
               <p>Computer Store</p>
               <p>${invoiceDocType === "faktur" ? "Faktur Penjualan Resmi" : "Dokumen Penawaran Barang"}</p>
               <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+              <p>No. Telp/WA: 08112642352</p>
+            </div>
+            <div class="logo-wrap">
+              <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
             </div>
           </div>
 
           <div class="title">${invoiceDocUpperLabel}</div>
 
-          <div class="meta">
+          <div class="meta${hasBuyerBox ? "" : " single"}">
             <div class="box">
               <p><strong>${docNoLabel}:</strong> ${generatedInvoiceNo}</p>
               <p><strong>Tanggal Cetak:</strong> ${printDate}</p>
@@ -1859,18 +1892,23 @@ export default function Page() {
                   ? `<p><strong>Berlaku Sampai:</strong> ${validUntilDate}</p>`
                   : ""
               }
-              <p><strong>Kurir:</strong> ${invoiceCourier || "-"}</p>
+              ${courierValue ? `<p><strong>Kurir:</strong> ${courierValue}</p>` : ""}
             </div>
-            <div class="box">
-              <p><strong>Pembeli:</strong> ${invoiceBuyer || "-"}</p>
-              <p><strong>Telepon:</strong> ${invoicePhone || "-"}</p>
-              <p><strong>Alamat:</strong> ${invoiceAddress || "-"}</p>
+            ${
+              hasBuyerBox
+                ? `<div class="box">
+              ${buyerValue ? `<p><strong>Pembeli:</strong> ${buyerValue}</p>` : ""}
+              ${phoneValue ? `<p><strong>Telepon:</strong> ${phoneValue}</p>` : ""}
+              ${whatsappValue ? `<p><strong>WhatsApp:</strong> ${whatsappValue}</p>` : ""}
+              ${addressValue ? `<p><strong>Alamat:</strong> ${addressValue}</p>` : ""}
               ${
-                invoiceDocType === "penawaran"
-                  ? `<p><strong>PIC Sales:</strong> ${invoiceSalesPic || "-"}</p>`
+                invoiceDocType === "penawaran" && salesPicValue
+                  ? `<p><strong>PIC Sales:</strong> ${salesPicValue}</p>`
                   : ""
               }
-            </div>
+            </div>`
+                : ""
+            }
           </div>
 
           <table>
@@ -1889,9 +1927,18 @@ export default function Page() {
           <div class="total">${totalLabel}: ${rupiah(invoiceSubtotal)}</div>
           <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
           ${
+            showBankAccount
+              ? `<div class="bank-section"><div class="bank-label">Rekening Pembayaran:</div><div>${bankAccountHtml}</div></div>`
+              : ""
+          }
+          ${
             invoiceDocType === "faktur"
               ? `<div class="terms">
-                  <div>Barang yang sudah dibeli tidak bisa dikembalikan.</div>
+                  <div class="terms-title">KETERANGAN :</div>
+                  <div>* Barang yang sudah dibeli tidak bisa dikembalikan.</div>
+                  <div>* Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</div>
+                  <div>* Harga diatas sudah termasuk Faktur Pajak.</div>
+                  <div>* Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</div>
                   <div class="terms-closing">Terima kasih atas kepercayaan Anda.</div>
                 </div>`
               : ""
@@ -1901,11 +1948,18 @@ export default function Page() {
               ? `<div class="terms">
                   <div class="terms-title">Syarat dan Ketentuan:</div>
                   <ol class="terms-list">
-                    <li>Harga di atas sudah termasuk PPN 11%.</li>
+                    <li>Harga diatas sudah termasuk Faktur Pajak.</li>
+                    <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
                     <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
                     <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>
-                    <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
+                    <li>Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</li>
+                    <li>Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</li>
                   </ol>
+                  ${
+                    showBankAccount
+                      ? `<div class="bank-box"><span class="bank-label">Rekening Pembayaran:</span><br />${bankAccountHtml}</div>`
+                      : ""
+                  }
                   <div class="terms-closing">Demikian surat penawaran ini kami sampaikan. Atas perhatian dan kerjasamanya, kami ucapkan terima kasih.</div>
                 </div>`
               : ""
@@ -1913,7 +1967,9 @@ export default function Page() {
           <div class="sign">
             <div class="sign-box">
               <div>Hormat kami,</div>
-              <div class="sign-space"></div>
+              <div class="sign-space ${invoiceIncludeSignAndStamp ? "" : "no-visual"}">
+                ${signVisuals}
+              </div>
               <div><strong>STARCOMP SOLO</strong></div>
             </div>
           </div>
@@ -2177,7 +2233,9 @@ export default function Page() {
       setInvoiceSaveNotice("Role viewer tidak punya izin cetak ulang dokumen.");
       return;
     }
-    const url = `/dokumen/${publicToken}?autoprint=1`;
+    const url = `/dokumen/${publicToken}?autoprint=1&includeSign=${invoiceIncludeSignAndStamp ? "1" : "0"}&includeBank=${
+      invoiceIncludeBankAccount ? "1" : "0"
+    }`;
     window.open(url, "_blank");
   }
 
@@ -4833,52 +4891,72 @@ export default function Page() {
                 <textarea value={invoiceNotes} onChange={(e) => setInvoiceNotes(e.target.value)} rows={2} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
               </label>
 
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={resetInvoiceWithConfirmation}
-                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
-                >
-                  Reset Dokumen
-                </button>
-                <button
-                  type="button"
-                  onClick={sendInvoiceToWhatsapp}
-                  disabled={isInvoiceSaving || !canManageDocuments}
-                  className="rounded-2xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100"
-                >
-                  {isInvoiceSaving ? "Menyimpan..." : "Kirim WhatsApp"}
-                </button>
-                <button
-                  type="button"
-                  onClick={copyDocumentLink}
-                  disabled={!invoicePublicToken}
-                  className="rounded-2xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Salin Link Dokumen
-                </button>
-                <button
-                  type="button"
-                  onClick={printInvoice}
-                  disabled={isInvoiceSaving || !canManageDocuments}
-                  className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
-                >
-                  {isInvoiceSaving
-                    ? "Menyimpan..."
-                    : invoiceDocType === "faktur"
-                      ? "Cetak Faktur"
-                      : "Cetak Penawaran"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void saveInvoiceHistoryEdits();
-                  }}
-                  disabled={isInvoiceSaving || !canManageDocuments || !invoicePublicToken || !invoiceNo}
-                  className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Simpan Perubahan
-                </button>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={invoiceIncludeSignAndStamp}
+                    onChange={(e) => setInvoiceIncludeSignAndStamp(e.target.checked)}
+                    className="h-4 w-4 accent-stone-700"
+                  />
+                  <span>Tampilkan TTD & Cap</span>
+                </label>
+                <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={invoiceIncludeBankAccount}
+                    onChange={(e) => setInvoiceIncludeBankAccount(e.target.checked)}
+                    className="h-4 w-4 accent-stone-700"
+                  />
+                  <span>Tampilkan No Rekening</span>
+                </label>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={resetInvoiceWithConfirmation}
+                    className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                  >
+                    Reset Dokumen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sendInvoiceToWhatsapp}
+                    disabled={isInvoiceSaving || !canManageDocuments}
+                    className="rounded-2xl border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100"
+                  >
+                    {isInvoiceSaving ? "Menyimpan..." : "Kirim WhatsApp"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copyDocumentLink}
+                    disabled={!invoicePublicToken}
+                    className="rounded-2xl border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Salin Link Dokumen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={printInvoice}
+                    disabled={isInvoiceSaving || !canManageDocuments}
+                    className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
+                  >
+                    {isInvoiceSaving
+                      ? "Menyimpan..."
+                      : invoiceDocType === "faktur"
+                        ? "Cetak Faktur"
+                        : "Cetak Penawaran"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void saveInvoiceHistoryEdits();
+                    }}
+                    disabled={isInvoiceSaving || !canManageDocuments || !invoicePublicToken || !invoiceNo}
+                    className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Simpan Perubahan
+                  </button>
+                </div>
               </div>
               {invoiceSaveNotice ? (
                 <p className="text-xs text-slate-600">{invoiceSaveNotice}</p>
