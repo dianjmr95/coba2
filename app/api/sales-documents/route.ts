@@ -25,6 +25,7 @@ type SalesDocumentRequest = {
   items?: SalesDocumentItem[];
   subtotal?: number;
   taxEnabled?: boolean;
+  taxMode?: "exclude" | "include";
   taxRate?: number;
   taxAmount?: number;
   grandTotal?: number;
@@ -75,7 +76,13 @@ function isMissingTaxColumnError(message: string) {
   const text = message.toLowerCase();
   return (
     (text.includes("schema cache") || text.includes("column")) &&
-    (text.includes("grand_total") || text.includes("tax_enabled") || text.includes("tax_rate") || text.includes("tax_amount"))
+    (
+      text.includes("grand_total") ||
+      text.includes("tax_enabled") ||
+      text.includes("tax_rate") ||
+      text.includes("tax_amount") ||
+      text.includes("tax_mode")
+    )
   );
 }
 
@@ -90,6 +97,7 @@ export async function POST(request: NextRequest) {
     const items = normalizeItems(body.items);
     const subtotal = Math.max(0, Math.round(Number(body.subtotal) || 0));
     const taxEnabled = Boolean(body.taxEnabled);
+    const taxMode = body.taxMode === "include" ? "include" : "exclude";
     const taxRate = Math.max(0, Number(body.taxRate) || 11);
     const taxAmount = taxEnabled ? Math.max(0, Math.round(Number(body.taxAmount) || 0)) : 0;
     const grandTotal = Math.max(
@@ -150,6 +158,14 @@ export async function POST(request: NextRequest) {
     const payloadWithTax = {
       ...payloadBase,
       tax_enabled: taxEnabled,
+      tax_mode: taxMode,
+      tax_rate: taxRate,
+      tax_amount: taxAmount,
+      grand_total: grandTotal
+    };
+    const payloadWithTaxNoMode = {
+      ...payloadBase,
+      tax_enabled: taxEnabled,
       tax_rate: taxRate,
       tax_amount: taxAmount,
       grand_total: grandTotal
@@ -165,14 +181,24 @@ export async function POST(request: NextRequest) {
         })
         .eq("id", existing.id);
       if (updateError && isMissingTaxColumnError(updateError.message || "")) {
-        const legacyRetry = await supabaseAdmin
+        const retryNoMode = await supabaseAdmin
+          .from("sales_documents")
+          .update({
+            ...payloadWithTaxNoMode,
+            print_count: nextPrintCount
+          })
+          .eq("id", existing.id);
+        updateError = retryNoMode.error;
+      }
+      if (updateError && isMissingTaxColumnError(updateError.message || "")) {
+        const legacyRetryNoTax = await supabaseAdmin
           .from("sales_documents")
           .update({
             ...payloadBase,
             print_count: nextPrintCount
           })
           .eq("id", existing.id);
-        updateError = legacyRetry.error;
+        updateError = legacyRetryNoTax.error;
       }
       if (updateError) {
         throw new Error(`Gagal update dokumen: ${updateError.message}`);
@@ -184,12 +210,20 @@ export async function POST(request: NextRequest) {
         created_by: authUserId
       });
       if (insertError && isMissingTaxColumnError(insertError.message || "")) {
-        const legacyRetry = await supabaseAdmin.from("sales_documents").insert({
+        const retryNoMode = await supabaseAdmin.from("sales_documents").insert({
+          ...payloadWithTaxNoMode,
+          print_count: markPrinted ? 1 : 0,
+          created_by: authUserId
+        });
+        insertError = retryNoMode.error;
+      }
+      if (insertError && isMissingTaxColumnError(insertError.message || "")) {
+        const legacyRetryNoTax = await supabaseAdmin.from("sales_documents").insert({
           ...payloadBase,
           print_count: markPrinted ? 1 : 0,
           created_by: authUserId
         });
-        insertError = legacyRetry.error;
+        insertError = legacyRetryNoTax.error;
       }
       if (insertError) {
         throw new Error(`Gagal simpan dokumen: ${insertError.message}`);

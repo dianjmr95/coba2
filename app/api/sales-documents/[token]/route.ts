@@ -16,7 +16,13 @@ function isMissingTaxColumnError(message: string) {
   const text = message.toLowerCase();
   return (
     (text.includes("schema cache") || text.includes("column")) &&
-    (text.includes("grand_total") || text.includes("tax_enabled") || text.includes("tax_rate") || text.includes("tax_amount"))
+    (
+      text.includes("grand_total") ||
+      text.includes("tax_enabled") ||
+      text.includes("tax_rate") ||
+      text.includes("tax_amount") ||
+      text.includes("tax_mode")
+    )
   );
 }
 
@@ -32,20 +38,31 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
     let { data, error } = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
     if (error && isMissingTaxColumnError(error.message || "")) {
-      const legacyResult = await supabaseAdmin
+      const retryNoMode = await supabaseAdmin
+        .from("sales_documents")
+        .select(
+          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+        )
+        .eq("public_token", publicToken)
+        .maybeSingle();
+      data = retryNoMode.data as typeof data;
+      error = retryNoMode.error;
+    }
+    if (error && isMissingTaxColumnError(error.message || "")) {
+      const legacyResultNoTax = await supabaseAdmin
         .from("sales_documents")
         .select(
           "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, print_count, last_printed_at, created_at"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
-      data = legacyResult.data as typeof data;
-      error = legacyResult.error;
+      data = legacyResultNoTax.data as typeof data;
+      error = legacyResultNoTax.error;
     }
 
     if (error) {
@@ -54,6 +71,30 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
     if (!data) {
       return NextResponse.json({ ok: false, error: "Dokumen tidak ditemukan." }, { status: 404 });
     }
+
+    const subtotal = Number(data.subtotal) || 0;
+    const taxRate = Math.max(0, Number(data.tax_rate) || 11);
+    const taxAmountRaw = Math.max(0, Number(data.tax_amount) || 0);
+    const grandTotalRaw = Math.max(0, Number(data.grand_total) || subtotal);
+    const inferredTaxEnabled = Boolean(data.tax_enabled) || taxAmountRaw > 0 || grandTotalRaw > subtotal + 1;
+    const rawTaxMode = String(data.tax_mode || "").toLowerCase();
+    const inferredTaxMode =
+      rawTaxMode === "include" || rawTaxMode === "exclude"
+        ? rawTaxMode
+        : inferredTaxEnabled && Math.abs(grandTotalRaw - subtotal) <= 1 && taxAmountRaw > 0
+          ? "include"
+          : "exclude";
+    const inferredTaxAmount =
+      inferredTaxEnabled
+        ? inferredTaxMode === "include"
+          ? Math.max(0, taxAmountRaw || subtotal - Math.round((subtotal * 100) / (100 + taxRate)))
+          : Math.max(0, taxAmountRaw || grandTotalRaw - subtotal || Math.round((subtotal * taxRate) / 100))
+        : 0;
+    const inferredGrandTotal = inferredTaxEnabled
+      ? inferredTaxMode === "include"
+        ? Math.max(0, grandTotalRaw || subtotal)
+        : Math.max(0, grandTotalRaw || subtotal + inferredTaxAmount)
+      : subtotal;
 
     return NextResponse.json({
       ok: true,
@@ -71,11 +112,12 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         salesPic: data.sales_pic,
         notes: data.notes,
         items: Array.isArray(data.items) ? data.items : [],
-        subtotal: Number(data.subtotal) || 0,
-        taxEnabled: Boolean(data.tax_enabled),
-        taxRate: Math.max(0, Number(data.tax_rate) || 11),
-        taxAmount: Math.max(0, Number(data.tax_amount) || 0),
-        grandTotal: Math.max(0, Number(data.grand_total) || Number(data.subtotal) || 0),
+        subtotal,
+        taxEnabled: inferredTaxEnabled,
+        taxMode: inferredTaxMode,
+        taxRate,
+        taxAmount: inferredTaxAmount,
+        grandTotal: inferredGrandTotal,
         printCount: Number(data.print_count) || 0,
         lastPrintedAt: data.last_printed_at,
         createdAt: data.created_at

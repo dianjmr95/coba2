@@ -53,6 +53,7 @@ type PresetItem = {
 type SectionId = "kalkulator-potongan" | "compare-harga" | "pembuatan-nota" | "rekap-penjualan";
 type UserRole = "admin" | "staff" | "staff_offline" | "viewer";
 type InvoiceDocumentType = "faktur" | "penawaran";
+type InvoiceTaxMode = "exclude" | "include";
 
 type InvoiceItem = {
   id: string;
@@ -91,6 +92,7 @@ type SalesDocumentDetailResponse = {
     taxRate: number;
     taxAmount: number;
     grandTotal: number;
+    taxMode?: InvoiceTaxMode;
   };
 };
 type SalesDocumentHistoryRow = {
@@ -677,29 +679,37 @@ function getNextInvoiceNumber(docType: InvoiceDocumentType = "faktur") {
 function cariHargaRekomendasi(targetNet: number, hitungNetDariHarga: (harga: number) => number) {
   if (targetNet <= 0) return 0;
 
-  let low = 0;
-  let high = Math.max(1, targetNet);
-  let netAtHigh = hitungNetDariHarga(high);
+  const netAtZero = hitungNetDariHarga(0);
+  const netAtOne = hitungNetDariHarga(1);
+  const slopeLinear = netAtOne - netAtZero;
+  const safeSlope = Number.isFinite(slopeLinear) && slopeLinear > 0.000001 ? slopeLinear : 1;
+  let harga = Math.max(1, (targetNet - netAtZero) / safeSlope);
 
-  for (let i = 0; i < 30 && netAtHigh < targetNet && high < 1_000_000_000; i += 1) {
-    high *= 2;
-    netAtHigh = hitungNetDariHarga(high);
-  }
+  for (let i = 0; i < 100; i += 1) {
+    const net = hitungNetDariHarga(harga);
+    const diff = targetNet - net;
+    if (Math.abs(diff) < 0.01) {
+      break;
+    }
 
-  if (netAtHigh < targetNet) return Number.NaN;
-
-  for (let i = 0; i < 60; i += 1) {
-    const mid = (low + high) / 2;
-    const net = hitungNetDariHarga(mid);
-
-    if (net >= targetNet) {
-      high = mid;
-    } else {
-      low = mid;
+    harga += diff;
+    if (!Number.isFinite(harga) || harga <= 0) {
+      harga = 1;
+    }
+    if (harga > 1_000_000_000) {
+      return Number.NaN;
     }
   }
 
-  return Math.ceil(high);
+  let hasil = Math.ceil(harga);
+  if (!Number.isFinite(hasil) || hasil <= 0) return Number.NaN;
+
+  for (let i = 0; i < 50; i += 1) {
+    if (hitungNetDariHarga(hasil) >= targetNet) return hasil;
+    hasil += 1;
+  }
+
+  return Number.NaN;
 }
 
 function normalizePresetData(value: unknown): PresetData | null {
@@ -1071,8 +1081,10 @@ export default function Page() {
   const [invoicePhone, setInvoicePhone] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
   const [invoiceTaxEnabled, setInvoiceTaxEnabled] = useState(false);
+  const [invoiceTaxMode, setInvoiceTaxMode] = useState<InvoiceTaxMode>("exclude");
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
   const [invoiceIncludeBankAccount, setInvoiceIncludeBankAccount] = useState(true);
+  const [invoiceIncludeSuratJalan, setInvoiceIncludeSuratJalan] = useState(true);
   const [invoiceAddress, setInvoiceAddress] = useState("");
   const [invoiceCourier, setInvoiceCourier] = useState("");
   const [invoiceNotes, setInvoiceNotes] = useState("");
@@ -1194,8 +1206,9 @@ export default function Page() {
         const rowKey = getPriceCompareRowKey(row);
         const presetId = priceCompareRowPresetMap[rowKey] ?? priceComparePresetId;
         const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "shopee";
+        const targetMarginUsed = targetMargin;
         const resolvedPreset = resolveComparePresetById(presetId);
-        const calc = calcItemPriceFromPreset(row.todayPrice, targetMargin, resolvedPreset.data);
+        const calc = calcItemPriceFromPreset(row.todayPrice, targetMarginUsed, resolvedPreset.data);
         const rawFinalShopee = (priceCompareRowFinalPriceShopeeMap[rowKey] ?? "").trim();
         const rawFinalMall = (priceCompareRowFinalPriceMallMap[rowKey] ?? "").trim();
         const parsedFinalShopee = Number(rawFinalShopee);
@@ -1224,6 +1237,7 @@ export default function Page() {
           row,
           rowKey,
           presetId,
+          targetMarginUsed,
           resolvedPreset,
           marketplace,
           marketplaceLabel,
@@ -1266,6 +1280,11 @@ export default function Page() {
 
   function getPriceCompareRowKey(row: PriceCompareRow) {
     return `${row.todayRowNumber}-${row.todayProductName}`;
+  }
+
+  function handleChangeGlobalTargetMargin(nextValue: number) {
+    const safeValue = Number.isFinite(nextValue) ? Math.max(0, nextValue) : 0;
+    setTargetMargin(safeValue);
   }
 
   function resolveComparePresetById(presetId: string) {
@@ -1960,7 +1979,9 @@ export default function Page() {
     setInvoicePhone("");
     setInvoiceWhatsapp("");
     setInvoiceTaxEnabled(false);
+    setInvoiceTaxMode("exclude");
     setInvoiceIncludeBankAccount(true);
+    setInvoiceIncludeSuratJalan(true);
     setInvoiceCourier("");
     setInvoiceAddress("");
     setInvoiceNotes("");
@@ -1979,13 +2000,27 @@ export default function Page() {
     [invoiceItems]
   );
   const invoiceTaxRate = 11;
+  const invoiceDppSubtotal = useMemo(() => {
+    if (!invoiceTaxEnabled || invoiceTaxMode === "exclude") return invoiceSubtotal;
+    return Math.round((invoiceSubtotal * 100) / (100 + invoiceTaxRate));
+  }, [invoiceSubtotal, invoiceTaxEnabled, invoiceTaxMode, invoiceTaxRate]);
   const invoiceTaxAmount = useMemo(
-    () => (invoiceTaxEnabled ? Math.round((invoiceSubtotal * invoiceTaxRate) / 100) : 0),
-    [invoiceSubtotal, invoiceTaxEnabled]
+    () =>
+      invoiceTaxEnabled
+        ? invoiceTaxMode === "include"
+          ? Math.max(0, invoiceSubtotal - invoiceDppSubtotal)
+          : Math.round((invoiceSubtotal * invoiceTaxRate) / 100)
+        : 0,
+    [invoiceSubtotal, invoiceTaxEnabled, invoiceTaxMode, invoiceDppSubtotal]
   );
+  const invoiceDisplaySubtotal = useMemo(
+    () => (invoiceTaxEnabled && invoiceTaxMode === "include" ? invoiceDppSubtotal : invoiceSubtotal),
+    [invoiceTaxEnabled, invoiceTaxMode, invoiceDppSubtotal, invoiceSubtotal]
+  );
+  const invoiceSubtotalLabel = invoiceTaxEnabled && invoiceTaxMode === "include" ? "Subtotal (DPP)" : "Subtotal";
   const invoiceGrandTotal = useMemo(
-    () => invoiceSubtotal + invoiceTaxAmount,
-    [invoiceSubtotal, invoiceTaxAmount]
+    () => (invoiceTaxEnabled ? (invoiceTaxMode === "include" ? invoiceSubtotal : invoiceSubtotal + invoiceTaxAmount) : invoiceSubtotal),
+    [invoiceSubtotal, invoiceTaxAmount, invoiceTaxEnabled, invoiceTaxMode]
   );
   const filteredInvoiceHistory = useMemo(() => {
     const buyerNeedle = invoiceHistoryBuyerQuery.trim().toLowerCase();
@@ -2086,6 +2121,7 @@ export default function Page() {
           items: normalizedItems,
           subtotal: invoiceSubtotal,
           taxEnabled: invoiceTaxEnabled,
+          taxMode: invoiceTaxMode,
           taxRate: invoiceTaxRate,
           taxAmount: invoiceTaxAmount,
           grandTotal: invoiceGrandTotal,
@@ -2162,6 +2198,10 @@ export default function Page() {
     const docNoLabel = invoiceDocType === "faktur" ? "No Faktur" : "No Penawaran";
     const totalLabel = invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN";
     const taxRateLabel = invoiceTaxRate.toFixed(2).replace(".", ",");
+    const taxTermsLine =
+      invoiceTaxMode === "include"
+        ? "* Harga diatas sudah termasuk Faktur Pajak."
+        : "* Harga diatas belum termasuk Faktur Pajak (PPN ditambahkan terpisah).";
     const hasBuyerBox = Boolean(
       buyerValue || phoneValue || whatsappValue || addressValue || (invoiceDocType === "penawaran" && salesPicValue)
     );
@@ -2169,6 +2209,84 @@ export default function Page() {
       ? `<img class="stamp" src="${logoUrl}" alt="Cap Starcomp" />
                 <img class="signature" src="${signatureUrl}" alt="Tanda tangan" />`
       : "";
+    const suratJalanNo = `${generatedInvoiceNo}/SJ`;
+    const suratJalanRows = invoiceItems
+      .map((item, idx) => {
+        return `<tr>
+          <td style="padding:8px;border:1px solid #ddd;">${idx + 1}</td>
+          <td style="padding:8px;border:1px solid #ddd;">${item.nama || "-"}</td>
+          <td style="padding:8px;border:1px solid #ddd;text-align:right;">${item.qty}</td>
+          <td style="padding:8px;border:1px solid #ddd;">&nbsp;</td>
+        </tr>`;
+      })
+      .join("");
+    const suratJalanSection =
+      invoiceDocType === "faktur" && invoiceIncludeSuratJalan
+        ? `<div class="sheet page-break">
+          <div class="header">
+            <div class="company">
+              <h1>STARCOMP SOLO</h1>
+              <p>Computer Store</p>
+              <p>Dokumen Pengiriman Barang</p>
+              <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+              <p>No. Telp/WA: 08112642352</p>
+            </div>
+            <div class="logo-wrap">
+              <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
+            </div>
+          </div>
+
+          <div class="title">SURAT JALAN</div>
+
+          <div class="meta">
+            <div class="box">
+              <p><strong>No Surat Jalan:</strong> ${suratJalanNo}</p>
+              <p><strong>Referensi Faktur:</strong> ${generatedInvoiceNo}</p>
+              <p><strong>Tanggal:</strong> ${printDate}</p>
+              ${courierValue ? `<p><strong>Kurir:</strong> ${courierValue}</p>` : ""}
+            </div>
+            <div class="box">
+              ${buyerValue ? `<p><strong>Dikirim Kepada:</strong> ${buyerValue}</p>` : `<p><strong>Dikirim Kepada:</strong> -</p>`}
+              ${phoneValue ? `<p><strong>Telepon:</strong> ${phoneValue}</p>` : ""}
+              ${addressValue ? `<p><strong>Alamat:</strong> ${addressValue}</p>` : `<p><strong>Alamat:</strong> -</p>`}
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width:36px;">No</th>
+                <th>Nama Barang</th>
+                <th class="right" style="width:70px;">Qty</th>
+                <th style="width:160px;">Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>${suratJalanRows}</tbody>
+          </table>
+
+          <div class="notes"><strong>Catatan Pengiriman:</strong> ${invoiceNotes || "-"}</div>
+
+          <div class="delivery-sign">
+            <div class="delivery-sign-box">
+              <div>Pengirim,</div>
+              <div class="delivery-sign-space ${invoiceIncludeSignAndStamp ? "" : "no-visual"}">
+                ${
+                  invoiceIncludeSignAndStamp
+                    ? `<img class="delivery-stamp" src="${logoUrl}" alt="Cap Starcomp" />
+                       <img class="delivery-signature" src="${signatureUrl}" alt="Tanda tangan" />`
+                    : ""
+                }
+              </div>
+              <div><strong>STARCOMP SOLO</strong></div>
+            </div>
+            <div class="delivery-sign-box">
+              <div>Penerima,</div>
+              <div class="delivery-sign-space"></div>
+              <div><strong>(________________)</strong></div>
+            </div>
+          </div>
+        </div>`
+        : "";
     const html = `<!doctype html>
     <html>
       <head>
@@ -2209,6 +2327,13 @@ export default function Page() {
           .sign-space.no-visual { height: 74px; }
           .stamp { position: absolute; left: 50%; top: 2px; width: 132px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
           .signature { position: absolute; left: 50%; top: 17px; width: 106px; transform: translateX(-50%); z-index: 1; }
+          .page-break { break-before: page; page-break-before: always; }
+          .delivery-sign { margin-top: 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+          .delivery-sign-box { text-align: center; font-size: 10px; }
+          .delivery-sign-space { height: 82px; position: relative; }
+          .delivery-sign-space.no-visual { height: 82px; }
+          .delivery-stamp { position: absolute; left: 50%; top: 6px; width: 126px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
+          .delivery-signature { position: absolute; left: 50%; top: 22px; width: 102px; transform: translateX(-50%); z-index: 1; }
         </style>
       </head>
       <body>
@@ -2272,7 +2397,7 @@ export default function Page() {
           ${
             invoiceTaxEnabled
               ? `<div style="margin-top:8px;display:grid;gap:3px;font-size:10px;">
-                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal</span><strong>${rupiah(invoiceSubtotal)}</strong></div>
+                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>${invoiceSubtotalLabel}</span><strong>${rupiah(invoiceDisplaySubtotal)}</strong></div>
                   <div style="display:flex;justify-content:flex-end;gap:8px;"><span>PPN (${taxRateLabel}%)</span><strong>${rupiah(invoiceTaxAmount)}</strong></div>
                 </div>`
               : ""
@@ -2292,7 +2417,7 @@ export default function Page() {
                   <div>* Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</div>
                   ${
                     invoiceTaxEnabled
-                      ? `<div>* Harga diatas sudah termasuk Faktur Pajak.</div>`
+                      ? `<div>${taxTermsLine}</div>`
                       : ""
                   }
                   <div>* Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</div>
@@ -2307,7 +2432,7 @@ export default function Page() {
                 <ol class="terms-list">
                     ${
                       invoiceTaxEnabled
-                        ? "<li>Harga diatas sudah termasuk Faktur Pajak.</li>"
+                        ? `<li>${taxTermsLine.replace("* ", "")}</li>`
                         : ""
                     }
                     <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
@@ -2335,6 +2460,7 @@ export default function Page() {
             </div>
           </div>
         </div>
+        ${suratJalanSection}
 
         <script>
           (function () {
@@ -2374,7 +2500,11 @@ export default function Page() {
     const params = new URLSearchParams({
       includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
       includeBank: invoiceIncludeBankAccount ? "1" : "0",
-      includeTax: invoiceTaxEnabled ? "1" : "0"
+      includeTax: invoiceTaxEnabled ? "1" : "0",
+      includeTaxMode: invoiceTaxMode,
+      includeTaxRate: String(invoiceTaxRate),
+      includeTaxAmount: String(invoiceTaxAmount),
+      includeSJ: invoiceIncludeSuratJalan ? "1" : "0"
     });
     return `${window.location.origin}/dokumen/${publicToken}?${params.toString()}`;
   }
@@ -2433,7 +2563,13 @@ export default function Page() {
       "*Rincian Barang:*",
       ...lines,
       "",
-      ...(invoiceTaxEnabled ? [`Subtotal: ${rupiah(invoiceSubtotal)}`, `PPN ${invoiceTaxRate}%: ${rupiah(invoiceTaxAmount)}`] : []),
+      ...(invoiceTaxEnabled
+        ? [
+            `${invoiceSubtotalLabel}: ${rupiah(invoiceDisplaySubtotal)}`,
+            `PPN ${invoiceTaxRate}%: ${rupiah(invoiceTaxAmount)}`,
+            `Mode PPN: ${invoiceTaxMode === "include" ? "Sudah termasuk PPN" : "PPN ditambahkan"}`
+          ]
+        : []),
       `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceGrandTotal)}*`,
       `Catatan: ${invoiceNotes || "-"}`,
       `Link dokumen: ${getDocumentShareUrl(savedDoc.publicToken)}`
@@ -2570,6 +2706,15 @@ export default function Page() {
       setInvoiceCourier(detail.courier || "");
       setInvoiceNotes(detail.notes || "");
       setInvoiceTaxEnabled(Boolean(detail.taxEnabled));
+      const detailTaxMode =
+        detail.taxMode === "include" || detail.taxMode === "exclude"
+          ? detail.taxMode
+          : Boolean(detail.taxEnabled) &&
+              Math.abs((Number(detail.grandTotal) || 0) - (Number(detail.subtotal) || 0)) <= 1 &&
+              (Number(detail.taxAmount) || 0) > 0
+            ? "include"
+            : "exclude";
+      setInvoiceTaxMode(detailTaxMode);
       setInvoiceItems(nextItems);
       setInvoiceSaveNotice(`Dokumen ${detail.documentNo} dimuat ke form. Kamu bisa edit lalu simpan/cetak ulang.`);
       return true;
@@ -2599,17 +2744,44 @@ export default function Page() {
     }
   }
 
-  function reprintHistoryDocument(publicToken: string) {
+  async function reprintHistoryDocument(publicToken: string) {
     if (!publicToken) return;
     if (authUser?.role === "viewer") {
       setInvoiceSaveNotice("Role viewer tidak punya izin cetak ulang dokumen.");
       return;
     }
+    let includeTax = invoiceTaxEnabled ? "1" : "0";
+    let includeTaxMode = invoiceTaxMode;
+    let includeTaxRate = String(invoiceTaxRate);
+    let includeTaxAmount = String(invoiceTaxEnabled ? invoiceTaxAmount : 0);
+    try {
+      const response = await fetch(`/api/sales-documents/${publicToken}`);
+      const payload = (await response.json()) as SalesDocumentDetailResponse;
+      if (response.ok && payload.ok && payload.data) {
+        const detail = payload.data;
+        const subtotal = Math.max(0, Number(detail.subtotal) || 0);
+        if (invoiceTaxEnabled) {
+          const computedTax =
+            invoiceTaxMode === "include"
+              ? Math.max(0, subtotal - Math.round((subtotal * 100) / (100 + invoiceTaxRate)))
+              : Math.max(0, Math.round((subtotal * invoiceTaxRate) / 100));
+          includeTaxAmount = String(computedTax);
+        } else {
+          includeTaxAmount = "0";
+        }
+      }
+    } catch {
+      // Fallback: keep current form-based tax settings
+    }
     const params = new URLSearchParams({
       autoprint: "1",
       includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
       includeBank: invoiceIncludeBankAccount ? "1" : "0",
-      includeTax: invoiceTaxEnabled ? "1" : "0"
+      includeTax,
+      includeTaxMode,
+      includeTaxRate,
+      includeTaxAmount,
+      includeSJ: invoiceIncludeSuratJalan ? "1" : "0"
     });
     const url = `/dokumen/${publicToken}?${params.toString()}`;
     window.open(url, "_blank");
@@ -3004,8 +3176,9 @@ export default function Page() {
     const rowKey = getPriceCompareRowKey(row);
     const presetId = priceCompareRowPresetMap[rowKey] ?? priceComparePresetId;
     const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "shopee";
+    const targetMarginUsed = targetMargin;
     const resolvedPreset = resolveComparePresetById(presetId);
-    const calc = calcItemPriceFromPreset(row.todayPrice, targetMargin, resolvedPreset.data);
+    const calc = calcItemPriceFromPreset(row.todayPrice, targetMarginUsed, resolvedPreset.data);
 
     const rekomHarga = marketplace === "shopee" ? calc.rekomShopee : calc.rekomMall;
     const rawManualFinal =
@@ -3029,7 +3202,7 @@ export default function Page() {
 
     const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
     setPriceCompareNotice(
-      `Produk "${row.todayProductName}" diproses ke Kalkulator. Preset: ${resolvedPreset.label}, modal & target harga ${marketplaceLabel} dikali 1000 (tambah 000). Target: ${rupiahOrDash(finalHargaForCalculator)}.`
+      `Produk "${row.todayProductName}" diproses ke Kalkulator. Preset: ${resolvedPreset.label}, margin target ${targetMarginUsed}% dipakai, modal & target harga ${marketplaceLabel} dikali 1000 (tambah 000). Target: ${rupiahOrDash(finalHargaForCalculator)}.`
     );
   }
 
@@ -3056,6 +3229,7 @@ export default function Page() {
         { header: "Similarity", key: "similarity", width: 12 },
         { header: "Preset Dipakai", key: "presetLabel", width: 26 },
         { header: "Marketplace Hitung", key: "marketplace", width: 20 },
+        { header: "Target Margin Dipakai (%)", key: "targetMarginUsed", width: 24 },
         { header: "Target Net", key: "targetNet", width: 16 },
         { header: "Rekom Tokopedia", key: "rekomTokopedia", width: 18 },
         { header: "Rekom Shopee", key: "rekomShopee", width: 16 },
@@ -3080,7 +3254,7 @@ export default function Page() {
         return "FFF1F5F9";
       };
 
-      for (const { row, calc, marketplace, resolvedPreset, finalPriceShopee, finalPriceMall, finalPrice, hasManualFinalShopee, hasManualFinalMall, sourceLabel } of priceCompareRowsWithCalc) {
+      for (const { row, calc, marketplace, targetMarginUsed, resolvedPreset, finalPriceShopee, finalPriceMall, finalPrice, hasManualFinalShopee, hasManualFinalMall, sourceLabel } of priceCompareRowsWithCalc) {
         const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
         const hasManualFinalSelectedMarketplace =
           marketplace === "shopee" ? hasManualFinalShopee : hasManualFinalMall;
@@ -3095,6 +3269,7 @@ export default function Page() {
           similarity: row.similarityScore,
           presetLabel: resolvedPreset.label,
           marketplace: marketplaceLabel,
+          targetMarginUsed,
           targetNet: Math.round(calc.targetNet),
           rekomTokopedia: Number.isFinite(calc.rekomTokopedia) ? Math.round(calc.rekomTokopedia) : "",
           rekomShopee: Number.isFinite(calc.rekomShopee) ? Math.round(calc.rekomShopee) : "",
@@ -3115,7 +3290,7 @@ export default function Page() {
         statusCell.font = { bold: true };
       }
 
-      for (const col of [3, 5, 6, 11, 12, 13, 14, 15, 16, 17]) {
+      for (const col of [3, 5, 6, 12, 13, 14, 15, 16, 17, 18]) {
         compareSheet.getColumn(col).numFmt = "#,##0";
       }
 
@@ -5344,7 +5519,7 @@ export default function Page() {
           <div className="grid gap-3 md:grid-cols-2">
             {activeSection === "kalkulator-potongan" ? <NumberInput label="Harga Jual (Rp)" value={harga} onChange={setHarga} step={100} /> : null}
             {activeSection === "kalkulator-potongan" ? <NumberInput label="Modal (Rp)" value={modal} onChange={setModal} step={100} /> : null}
-            {activeSection === "kalkulator-potongan" ? <NumberInput label="Target Margin (%)" value={targetMargin} onChange={setTargetMargin} step={0.1} /> : null}
+            {activeSection === "kalkulator-potongan" ? <NumberInput label="Target Margin (%)" value={targetMargin} onChange={handleChangeGlobalTargetMargin} step={0.1} /> : null}
             {ENABLE_AUTO_PRICE_FETCH && activeSection === "kalkulator-potongan" ? (
               <div className="md:col-span-2 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700">Ambil Harga Otomatis</p>
@@ -5455,7 +5630,7 @@ export default function Page() {
                     min={0}
                     step={0.1}
                     value={targetMargin}
-                    onChange={(e) => setTargetMargin(Number(e.target.value || 0))}
+                    onChange={(e) => handleChangeGlobalTargetMargin(Number(e.target.value || 0))}
                     className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
                   />
                 </label>
@@ -5479,7 +5654,7 @@ export default function Page() {
                   Preset terpakai:{" "}
                   <strong className="text-slate-900">{priceComparePresetResolved.label}</strong>
                   <br />
-                  Tip: gunakan tombol <strong className="text-slate-900">Ke Modal/Ke Harga Jual</strong> di tabel untuk isi kalkulator cepat.
+                  Tip: rekomendasi di tabel mengikuti <strong className="text-slate-900">Target Margin Global</strong>.
                 </div>
               </div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -5622,7 +5797,7 @@ export default function Page() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredPriceCompareRowsWithCalc.map(({ row, calc, rowKey, presetId, marketplace, marketplaceLabel, finalPriceShopee, finalPriceMall, finalPrice, sourceLabelShopee, sourceLabelMall }, index) => {
+                      {filteredPriceCompareRowsWithCalc.map(({ row, calc, rowKey, presetId, marketplace, marketplaceLabel, targetMarginUsed, finalPriceShopee, finalPriceMall, finalPrice, sourceLabelShopee, sourceLabelMall }, index) => {
                         const statusClass =
                           row.status === "today_cheaper"
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200"
@@ -5693,6 +5868,9 @@ export default function Page() {
                                     <option value="shopee">Hitung Shopee</option>
                                     <option value="mall">Hitung Tokopedia Mall</option>
                                   </select>
+                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
+                                    Target margin dipakai: <strong className="text-slate-700">{targetMarginUsed.toFixed(2)}%</strong>
+                                  </p>
                                   <button
                                     type="button"
                                     onClick={() => handleCalculateRowToCalculator(row)}
@@ -5895,9 +6073,9 @@ export default function Page() {
           </div>
 
           {[
-            { key: "tokopedia", title: "Tokopedia", data: hasil.tokopedia },
-            { key: "shopee", title: "Shopee", data: hasil.shopee },
-            { key: "mall", title: "Tokopedia Mall", data: hasil.mall }
+            { key: "tokopedia", title: "Tokopedia", data: hasil.tokopedia, margin: hasil.marginTokopedia, pct: hasil.pctTokopedia },
+            { key: "shopee", title: "Shopee", data: hasil.shopee, margin: hasil.marginShopee, pct: hasil.pctShopee },
+            { key: "mall", title: "Tokopedia Mall", data: hasil.mall, margin: hasil.marginMall, pct: hasil.pctMall }
           ].map((m) => (
             <section
               key={m.key}
@@ -5927,6 +6105,7 @@ export default function Page() {
                 ) : null}
                 <li className="flex justify-between gap-2"><span>Total Potongan</span><strong className="tabular-nums text-slate-900">{rupiah(m.data.total)}</strong></li>
                 <li className="flex justify-between gap-2"><span>Pendapatan Bersih</span><strong className="tabular-nums text-slate-900">{rupiah(m.data.net)}</strong></li>
+                <li className="flex justify-between gap-2"><span>Margin</span><strong className="tabular-nums text-slate-900">{`${rupiah(m.margin)} (${m.pct.toFixed(2)}%)`}</strong></li>
                 <li className="flex justify-between gap-2">
                   <span>Status Target Margin</span>
                   <strong className={m.data.net >= hasil.targetNet ? "text-slate-900" : "text-rose-600"}>
@@ -5967,9 +6146,6 @@ export default function Page() {
           ))}
 
           <div className="mt-3 grid gap-1 border-t border-dashed border-slate-300 pt-2 text-sm text-slate-600">
-            <div className="flex justify-between gap-2"><span>Margin Tokopedia</span><strong className="tabular-nums text-slate-900">{`${rupiah(hasil.marginTokopedia)} (${hasil.pctTokopedia.toFixed(2)}%)`}</strong></div>
-            <div className="flex justify-between gap-2"><span>Margin Shopee</span><strong className="tabular-nums text-slate-900">{`${rupiah(hasil.marginShopee)} (${hasil.pctShopee.toFixed(2)}%)`}</strong></div>
-            <div className="flex justify-between gap-2"><span>Margin Tokopedia Mall</span><strong className="tabular-nums text-slate-900">{`${rupiah(hasil.marginMall)} (${hasil.pctMall.toFixed(2)}%)`}</strong></div>
             <div className="flex justify-between gap-2"><span>Harga Rekomendasi Tokopedia</span><strong className="tabular-nums text-slate-900">{rupiahOrDash(hasil.rekomTokopedia)}</strong></div>
             <div className="flex justify-between gap-2"><span>Harga Rekomendasi Shopee</span><strong className="tabular-nums text-slate-900">{rupiahOrDash(hasil.rekomShopee)}</strong></div>
             <div className="flex justify-between gap-2"><span>Harga Rekomendasi Tokopedia Mall</span><strong className="tabular-nums text-slate-900">{rupiahOrDash(hasil.rekomMall)}</strong></div>
@@ -6085,10 +6261,14 @@ export default function Page() {
                   })}
                 </div>
                 <div className="mt-2 grid gap-1 text-sm text-slate-700">
-                  <div className="flex justify-end font-semibold text-slate-800">Subtotal: {rupiah(invoiceSubtotal)}</div>
                   {invoiceTaxEnabled ? (
-                    <div className="flex justify-end">PPN {invoiceTaxRate}%: {rupiah(invoiceTaxAmount)}</div>
-                  ) : null}
+                    <>
+                      <div className="flex justify-end font-semibold text-slate-800">{invoiceSubtotalLabel}: {rupiah(invoiceDisplaySubtotal)}</div>
+                      <div className="flex justify-end">PPN {invoiceTaxRate}%: {rupiah(invoiceTaxAmount)}</div>
+                    </>
+                  ) : (
+                    <div className="flex justify-end font-semibold text-slate-800">Subtotal: {rupiah(invoiceSubtotal)}</div>
+                  )}
                   <div className="flex justify-end font-bold text-slate-900">
                     Total: {rupiah(invoiceGrandTotal)}
                   </div>
@@ -6119,6 +6299,19 @@ export default function Page() {
                   />
                   <span>Terapkan PPN 11%</span>
                 </label>
+                {invoiceTaxEnabled ? (
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                    <span>Mode PPN</span>
+                    <select
+                      value={invoiceTaxMode}
+                      onChange={(e) => setInvoiceTaxMode(e.target.value === "include" ? "include" : "exclude")}
+                      className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-sm text-slate-700 outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    >
+                      <option value="exclude">Harga + PPN 11%</option>
+                      <option value="include">Harga sudah include PPN</option>
+                    </select>
+                  </label>
+                ) : null}
                 <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
                   <input
                     type="checkbox"
@@ -6128,6 +6321,17 @@ export default function Page() {
                   />
                   <span>Tampilkan No Rekening</span>
                 </label>
+                {invoiceDocType === "faktur" ? (
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={invoiceIncludeSuratJalan}
+                      onChange={(e) => setInvoiceIncludeSuratJalan(e.target.checked)}
+                      className="h-4 w-4 accent-stone-700"
+                    />
+                    <span>Cetak dengan Surat Jalan</span>
+                  </label>
+                ) : null}
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <button
                     type="button"
