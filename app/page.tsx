@@ -191,7 +191,7 @@ type PriceCompareItemCalc = {
   rekomShopee: number;
   rekomMall: number;
 };
-type CompareCalcMarketplace = "tokopedia" | "shopee" | "mall";
+type CompareCalcMarketplace = "shopee" | "mall";
 type MyRoleApiResponse = {
   ok: boolean;
   error?: string;
@@ -1014,7 +1014,8 @@ export default function Page() {
   const [priceCompareFilterMatch, setPriceCompareFilterMatch] = useState<"semua" | "match" | "tidak_match">("semua");
   const [priceCompareRowPresetMap, setPriceCompareRowPresetMap] = useState<Record<string, string>>({});
   const [priceCompareRowMarketplaceMap, setPriceCompareRowMarketplaceMap] = useState<Record<string, CompareCalcMarketplace>>({});
-  const [priceCompareRowFinalPriceMap, setPriceCompareRowFinalPriceMap] = useState<Record<string, string>>({});
+  const [priceCompareRowFinalPriceShopeeMap, setPriceCompareRowFinalPriceShopeeMap] = useState<Record<string, string>>({});
+  const [priceCompareRowFinalPriceMallMap, setPriceCompareRowFinalPriceMallMap] = useState<Record<string, string>>({});
   const todayPriceListInputRef = useRef<HTMLInputElement | null>(null);
   const previousPriceListInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1192,33 +1193,50 @@ export default function Page() {
       priceCompareRows.map((row) => {
         const rowKey = getPriceCompareRowKey(row);
         const presetId = priceCompareRowPresetMap[rowKey] ?? priceComparePresetId;
-        const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "tokopedia";
+        const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "shopee";
         const resolvedPreset = resolveComparePresetById(presetId);
         const calc = calcItemPriceFromPreset(row.todayPrice, targetMargin, resolvedPreset.data);
-        const rekomSelected =
-          marketplace === "tokopedia"
-            ? calc.rekomTokopedia
-            : marketplace === "shopee"
-              ? calc.rekomShopee
-              : calc.rekomMall;
-        const rawFinal = (priceCompareRowFinalPriceMap[rowKey] ?? "").trim();
-        const parsedFinal = Number(rawFinal);
-        const hasManualFinal = rawFinal !== "" && Number.isFinite(parsedFinal) && parsedFinal > 0;
+        const rawFinalShopee = (priceCompareRowFinalPriceShopeeMap[rowKey] ?? "").trim();
+        const rawFinalMall = (priceCompareRowFinalPriceMallMap[rowKey] ?? "").trim();
+        const parsedFinalShopee = Number(rawFinalShopee);
+        const parsedFinalMall = Number(rawFinalMall);
+        const hasManualFinalShopee = rawFinalShopee !== "" && Number.isFinite(parsedFinalShopee) && parsedFinalShopee > 0;
+        const hasManualFinalMall = rawFinalMall !== "" && Number.isFinite(parsedFinalMall) && parsedFinalMall > 0;
+        const hasManualFinal = hasManualFinalShopee || hasManualFinalMall;
         const hasPresetOverride = Object.prototype.hasOwnProperty.call(priceCompareRowPresetMap, rowKey);
         const hasMarketplaceOverride = Object.prototype.hasOwnProperty.call(priceCompareRowMarketplaceMap, rowKey);
         const hasRowAdjustment = hasPresetOverride || hasMarketplaceOverride;
-        const finalPrice = hasManualFinal ? Math.round(parsedFinal) : Math.round(rekomSelected || 0);
+        const finalPriceShopee = hasManualFinalShopee ? Math.round(parsedFinalShopee) : Math.round(calc.rekomShopee || 0);
+        const finalPriceMall = hasManualFinalMall ? Math.round(parsedFinalMall) : Math.round(calc.rekomMall || 0);
+        const finalPrice = marketplace === "shopee" ? finalPriceShopee : finalPriceMall;
+        const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
+        const sourceLabelShopee = hasManualFinalShopee
+          ? "Manual Override (Shopee)"
+          : hasRowAdjustment
+            ? "Penyesuaian Baris (Shopee)"
+            : "Global Margin (Shopee)";
+        const sourceLabelMall = hasManualFinalMall
+          ? "Manual Override (Tokopedia Mall)"
+          : hasRowAdjustment
+            ? "Penyesuaian Baris (Tokopedia Mall)"
+            : "Global Margin (Tokopedia Mall)";
         return {
           row,
           rowKey,
           presetId,
           resolvedPreset,
           marketplace,
+          marketplaceLabel,
           calc,
-          rekomSelected,
+          finalPriceShopee,
+          finalPriceMall,
           finalPrice,
+          hasManualFinalShopee,
+          hasManualFinalMall,
           hasManualFinal,
-          sourceLabel: hasManualFinal ? "Manual Override" : hasRowAdjustment ? "Penyesuaian Baris" : "Global Margin"
+          sourceLabelShopee,
+          sourceLabelMall,
+          sourceLabel: marketplace === "shopee" ? sourceLabelShopee : sourceLabelMall
         };
       }),
     [
@@ -1226,7 +1244,8 @@ export default function Page() {
       priceCompareRowPresetMap,
       priceComparePresetId,
       priceCompareRowMarketplaceMap,
-      priceCompareRowFinalPriceMap,
+      priceCompareRowFinalPriceShopeeMap,
+      priceCompareRowFinalPriceMallMap,
       resolveComparePresetById,
       targetMargin
     ]
@@ -2948,7 +2967,8 @@ export default function Page() {
       setPriceCompareRows(rows);
       setPriceCompareRowPresetMap({});
       setPriceCompareRowMarketplaceMap({});
-      setPriceCompareRowFinalPriceMap({});
+      setPriceCompareRowFinalPriceShopeeMap({});
+      setPriceCompareRowFinalPriceMallMap({});
       setPriceCompareSummary(summary);
       setPriceCompareNotice(
         summary
@@ -2983,34 +3003,33 @@ export default function Page() {
 
     const rowKey = getPriceCompareRowKey(row);
     const presetId = priceCompareRowPresetMap[rowKey] ?? priceComparePresetId;
-    const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "tokopedia";
+    const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "shopee";
     const resolvedPreset = resolveComparePresetById(presetId);
     const calc = calcItemPriceFromPreset(row.todayPrice, targetMargin, resolvedPreset.data);
 
-    const rekomHarga =
-      marketplace === "tokopedia"
-        ? calc.rekomTokopedia
-        : marketplace === "shopee"
-          ? calc.rekomShopee
-          : calc.rekomMall;
-    const rawManualFinal = (priceCompareRowFinalPriceMap[rowKey] ?? "").trim();
+    const rekomHarga = marketplace === "shopee" ? calc.rekomShopee : calc.rekomMall;
+    const rawManualFinal =
+      marketplace === "shopee"
+        ? (priceCompareRowFinalPriceShopeeMap[rowKey] ?? "").trim()
+        : (priceCompareRowFinalPriceMallMap[rowKey] ?? "").trim();
     const parsedManualFinal = Number(rawManualFinal);
     const finalHarga =
       rawManualFinal !== "" && Number.isFinite(parsedManualFinal) && parsedManualFinal > 0
         ? Math.round(parsedManualFinal)
         : Math.round(rekomHarga || 0);
+    const modalForCalculator = Math.round(row.todayPrice * 1000);
+    const finalHargaForCalculator = Number.isFinite(finalHarga) && finalHarga > 0 ? Math.round(finalHarga * 1000) : 0;
 
     applyPreset(resolvedPreset.data);
-    setModal(Math.round(row.todayPrice));
-    if (Number.isFinite(finalHarga) && finalHarga > 0) {
-      setHarga(finalHarga);
+    setModal(modalForCalculator);
+    if (finalHargaForCalculator > 0) {
+      setHarga(finalHargaForCalculator);
     }
     setActiveSection("kalkulator-potongan");
 
-    const marketplaceLabel =
-      marketplace === "tokopedia" ? "Tokopedia" : marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
+    const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
     setPriceCompareNotice(
-      `Produk "${row.todayProductName}" diproses ke Kalkulator. Preset: ${resolvedPreset.label}, target harga ${marketplaceLabel}: ${rupiahOrDash(finalHarga)}.`
+      `Produk "${row.todayProductName}" diproses ke Kalkulator. Preset: ${resolvedPreset.label}, modal & target harga ${marketplaceLabel} dikali 1000 (tambah 000). Target: ${rupiahOrDash(finalHargaForCalculator)}.`
     );
   }
 
@@ -3041,7 +3060,9 @@ export default function Page() {
         { header: "Rekom Tokopedia", key: "rekomTokopedia", width: 18 },
         { header: "Rekom Shopee", key: "rekomShopee", width: 16 },
         { header: "Rekom Mall", key: "rekomMall", width: 16 },
-        { header: "Harga Final", key: "finalPrice", width: 16 },
+        { header: "Harga Final Shopee", key: "finalPriceShopee", width: 18 },
+        { header: "Harga Final Mall", key: "finalPriceMall", width: 18 },
+        { header: "Harga Final Dipakai", key: "finalPrice", width: 18 },
         { header: "Sumber Perhitungan", key: "sourceLabel", width: 20 }
       ];
 
@@ -3059,9 +3080,10 @@ export default function Page() {
         return "FFF1F5F9";
       };
 
-      for (const { row, calc, marketplace, resolvedPreset, finalPrice, sourceLabel } of priceCompareRowsWithCalc) {
-        const marketplaceLabel =
-          marketplace === "tokopedia" ? "Tokopedia" : marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
+      for (const { row, calc, marketplace, resolvedPreset, finalPriceShopee, finalPriceMall, finalPrice, hasManualFinalShopee, hasManualFinalMall, sourceLabel } of priceCompareRowsWithCalc) {
+        const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
+        const hasManualFinalSelectedMarketplace =
+          marketplace === "shopee" ? hasManualFinalShopee : hasManualFinalMall;
         const added = compareSheet.addRow({
           todayRow: row.todayRowNumber,
           todayProduct: row.todayProductName,
@@ -3077,7 +3099,9 @@ export default function Page() {
           rekomTokopedia: Number.isFinite(calc.rekomTokopedia) ? Math.round(calc.rekomTokopedia) : "",
           rekomShopee: Number.isFinite(calc.rekomShopee) ? Math.round(calc.rekomShopee) : "",
           rekomMall: Number.isFinite(calc.rekomMall) ? Math.round(calc.rekomMall) : "",
-          finalPrice: Number.isFinite(finalPrice) && finalPrice > 0 ? finalPrice : "",
+          finalPriceShopee: hasManualFinalShopee && Number.isFinite(finalPriceShopee) && finalPriceShopee > 0 ? finalPriceShopee : "",
+          finalPriceMall: hasManualFinalMall && Number.isFinite(finalPriceMall) && finalPriceMall > 0 ? finalPriceMall : "",
+          finalPrice: hasManualFinalSelectedMarketplace && Number.isFinite(finalPrice) && finalPrice > 0 ? finalPrice : "",
           sourceLabel
         });
 
@@ -3091,7 +3115,7 @@ export default function Page() {
         statusCell.font = { bold: true };
       }
 
-      for (const col of [3, 5, 6, 11, 12, 13, 14]) {
+      for (const col of [3, 5, 6, 11, 12, 13, 14, 15, 16, 17]) {
         compareSheet.getColumn(col).numFmt = "#,##0";
       }
 
@@ -3112,7 +3136,7 @@ export default function Page() {
         { metric: "Target Margin (%)", value: targetMargin },
         { metric: "Total Baris", value: priceCompareSummary?.totalRows ?? priceCompareRowsWithCalc.length },
         { metric: "Berhasil Match", value: priceCompareSummary?.matchedRows ?? 0 },
-        { metric: "Baris Manual Override", value: priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length },
+        { metric: "Baris Manual Override Shopee/Mall", value: priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length },
         { metric: "Hari Ini Lebih Murah", value: priceCompareSummary?.todayCheaperCount ?? 0 },
         { metric: "Sebelumnya Lebih Murah", value: priceCompareSummary?.previousCheaperCount ?? 0 },
         { metric: "Tidak Naik", value: priceCompareSummary?.samePriceCount ?? 0 }
@@ -5483,7 +5507,8 @@ export default function Page() {
                     setPriceCompareNotice("");
                     setPriceCompareRowPresetMap({});
                     setPriceCompareRowMarketplaceMap({});
-                    setPriceCompareRowFinalPriceMap({});
+                    setPriceCompareRowFinalPriceShopeeMap({});
+                    setPriceCompareRowFinalPriceMallMap({});
                     setTodayPriceListFile(null);
                     setPreviousPriceListFile(null);
                     if (todayPriceListInputRef.current) todayPriceListInputRef.current.value = "";
@@ -5551,7 +5576,7 @@ export default function Page() {
               {priceCompareRowsWithCalc.length ? (
                 <p className="mt-2 text-xs text-slate-600">
                   Menampilkan <strong>{filteredPriceCompareRowsWithCalc.length}</strong> dari{" "}
-                  <strong>{priceCompareRowsWithCalc.length}</strong> baris hasil compare. Override manual:{" "}
+                  <strong>{priceCompareRowsWithCalc.length}</strong> baris hasil compare. Override manual Shopee/Mall:{" "}
                   <strong>{priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length}</strong>.
                 </p>
               ) : null}
@@ -5597,7 +5622,7 @@ export default function Page() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredPriceCompareRowsWithCalc.map(({ row, calc, rowKey, presetId, marketplace, finalPrice, sourceLabel }, index) => {
+                      {filteredPriceCompareRowsWithCalc.map(({ row, calc, rowKey, presetId, marketplace, marketplaceLabel, finalPriceShopee, finalPriceMall, finalPrice, sourceLabelShopee, sourceLabelMall }, index) => {
                         const statusClass =
                           row.status === "today_cheaper"
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200"
@@ -5665,7 +5690,6 @@ export default function Page() {
                                     }
                                     className="w-[170px] rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
                                   >
-                                    <option value="tokopedia">Hitung Tokopedia</option>
                                     <option value="shopee">Hitung Shopee</option>
                                     <option value="mall">Hitung Tokopedia Mall</option>
                                   </select>
@@ -5679,18 +5703,37 @@ export default function Page() {
                                   <input
                                     type="number"
                                     min={0}
-                                    value={priceCompareRowFinalPriceMap[rowKey] ?? ""}
+                                    value={priceCompareRowFinalPriceShopeeMap[rowKey] ?? ""}
                                     onChange={(e) =>
-                                      setPriceCompareRowFinalPriceMap((prev) => ({
+                                      setPriceCompareRowFinalPriceShopeeMap((prev) => ({
                                         ...prev,
                                         [rowKey]: e.target.value
                                       }))
                                     }
-                                    placeholder="Harga final (opsional)"
-                                    className="w-[170px] rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-right text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                                    placeholder="Harga final Shopee (opsional)"
+                                    className="w-[170px] rounded-lg border border-orange-200 bg-white px-2 py-1 text-[11px] text-right text-slate-700 outline-none transition focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
                                   />
                                   <p className="w-[170px] text-right text-[11px] text-slate-500">
-                                    {sourceLabel}: <strong className="text-slate-700">{rupiahOrDash(finalPrice)}</strong>
+                                    {sourceLabelShopee}: <strong className="text-slate-700">{rupiahOrDash(finalPriceShopee)}</strong>
+                                  </p>
+                                  <input
+                                    type="number"
+                                    min={0}
+                                    value={priceCompareRowFinalPriceMallMap[rowKey] ?? ""}
+                                    onChange={(e) =>
+                                      setPriceCompareRowFinalPriceMallMap((prev) => ({
+                                        ...prev,
+                                        [rowKey]: e.target.value
+                                      }))
+                                    }
+                                    placeholder="Harga final Tokopedia Mall (opsional)"
+                                    className="w-[170px] rounded-lg border border-sky-200 bg-white px-2 py-1 text-[11px] text-right text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                                  />
+                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
+                                    {sourceLabelMall}: <strong className="text-slate-700">{rupiahOrDash(finalPriceMall)}</strong>
+                                  </p>
+                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
+                                    Dipakai untuk Kalkulator ({marketplaceLabel}): <strong className="text-slate-700">{rupiahOrDash(finalPrice)}</strong>
                                   </p>
                                   <div className="flex items-center justify-end gap-1">
                                   <button
