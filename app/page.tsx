@@ -1152,6 +1152,7 @@ export default function Page() {
   const [cancelDraftNominal, setCancelDraftNominal] = useState(0);
   const [cancelStatusSaving, setCancelStatusSaving] = useState(false);
   const [cancelTrendDays, setCancelTrendDays] = useState<7 | 14 | 30 | "all">(7);
+  const [recapLineHoverDate, setRecapLineHoverDate] = useState<string | null>(null);
   const [supportsOrderItemsColumn, setSupportsOrderItemsColumn] = useState(true);
   const cancelDraftCloseTimerRef = useRef<number | null>(null);
   const invoiceDocLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
@@ -4412,6 +4413,12 @@ export default function Page() {
     };
   }, [recapRows]);
 
+  const recapLineActivePoint = useMemo(() => {
+    if (!recapLineChart.points.length) return null;
+    if (!recapLineHoverDate) return recapLineChart.points[recapLineChart.points.length - 1] ?? null;
+    return recapLineChart.points.find((point) => point.date === recapLineHoverDate) ?? recapLineChart.points[recapLineChart.points.length - 1] ?? null;
+  }, [recapLineChart.points, recapLineHoverDate]);
+
   const recapCancelTrend = useMemo(() => {
     const cancelByDate = new Map<string, { count: number; nominal: number }>();
     const dayMs = 24 * 60 * 60 * 1000;
@@ -5246,7 +5253,18 @@ export default function Page() {
             </div>
 
             {recapLineChart.hasData ? (
-              <div className="overflow-x-auto rounded-2xl border border-sky-100 bg-white/85 p-2">
+              <div className="relative overflow-x-auto rounded-2xl border border-sky-100 bg-white/85 p-2">
+                {recapLineActivePoint ? (
+                  <div
+                    className="pointer-events-none absolute top-2 z-10 hidden -translate-x-1/2 rounded-xl border border-sky-200 bg-white/95 px-2.5 py-1.5 text-[11px] shadow-sm sm:block"
+                    style={{
+                      left: `${(recapLineActivePoint.x / recapLineChart.width) * 100}%`
+                    }}
+                  >
+                    <p className="font-semibold text-slate-800">{recapLineActivePoint.date.slice(5)}</p>
+                    <p className="text-sky-700">{rupiah(recapLineActivePoint.value)}</p>
+                  </div>
+                ) : null}
                 <svg viewBox={`0 0 ${recapLineChart.width} ${recapLineChart.height}`} className="h-52 w-full min-w-[520px] sm:min-w-[640px]">
                   <defs>
                     <linearGradient id="lineAreaFill" x1="0" y1="0" x2="0" y2="1">
@@ -5262,19 +5280,89 @@ export default function Page() {
                     y2={recapLineChart.height - recapLineChart.padY}
                     stroke="#cbd5e1"
                     strokeDasharray="4 4"
-                  />
+                    opacity="0"
+                  >
+                    <animate attributeName="opacity" from="0" to="1" dur="0.35s" fill="freeze" />
+                  </line>
 
                   {recapLineChart.areaPath ? (
-                    <path d={recapLineChart.areaPath} fill="url(#lineAreaFill)" />
+                    <path d={recapLineChart.areaPath} fill="url(#lineAreaFill)" opacity="0">
+                      <animate attributeName="opacity" from="0" to="1" begin="0.12s" dur="0.55s" fill="freeze" />
+                    </path>
                   ) : null}
                   {recapLineChart.linePath ? (
-                    <path d={recapLineChart.linePath} fill="none" stroke="#0ea5e9" strokeWidth="3" strokeLinecap="round" />
+                    <path
+                      d={recapLineChart.linePath}
+                      fill="none"
+                      stroke="#0ea5e9"
+                      strokeWidth="3"
+                      strokeLinecap="round"
+                      pathLength={1}
+                      strokeDasharray={1}
+                      strokeDashoffset={1}
+                    >
+                      <animate attributeName="stroke-dashoffset" from="1" to="0" dur="0.9s" fill="freeze" />
+                    </path>
                   ) : null}
 
-                  {recapLineChart.points.map((point) => (
-                    <g key={`line-point-${point.date}`}>
-                      <circle cx={point.x} cy={point.y} r="4.5" fill="#fff" stroke="#0284c7" strokeWidth="2" />
-                      <text x={point.x} y={point.y - 10} textAnchor="middle" fontSize="10" fill="#0f172a">
+                  {recapLineChart.points.length ? (
+                    <circle
+                      cx={(recapLineActivePoint ?? recapLineChart.points[recapLineChart.points.length - 1]).x}
+                      cy={(recapLineActivePoint ?? recapLineChart.points[recapLineChart.points.length - 1]).y}
+                      r="7.5"
+                      fill="#0ea5e9"
+                      opacity="0.16"
+                    >
+                      <animate attributeName="r" values="6.5;9.5;6.5" dur="1.8s" repeatCount="indefinite" />
+                      <animate attributeName="opacity" values="0.14;0.24;0.14" dur="1.8s" repeatCount="indefinite" />
+                    </circle>
+                  ) : null}
+
+                  {recapLineChart.points.map((point, index) => (
+                    <g
+                      key={`line-point-${point.date}`}
+                      onMouseEnter={() => setRecapLineHoverDate(point.date)}
+                      onMouseLeave={() => setRecapLineHoverDate(null)}
+                      onFocus={() => setRecapLineHoverDate(point.date)}
+                      onBlur={() => setRecapLineHoverDate(null)}
+                    >
+                      <circle cx={point.x} cy={point.y} r="12" fill="transparent" tabIndex={0} />
+                      <circle cx={point.x} cy={point.y} r="0" fill="#0ea5e9" opacity="0.18">
+                        <animate
+                          attributeName="r"
+                          from="0"
+                          to="8"
+                          begin={`${0.45 + index * 0.08}s`}
+                          dur="0.35s"
+                          fill="freeze"
+                        />
+                      </circle>
+                      <circle
+                        cx={point.x}
+                        cy={point.y}
+                        r={recapLineHoverDate === point.date ? "5.5" : "0"}
+                        fill="#fff"
+                        stroke="#0284c7"
+                        strokeWidth="2"
+                      >
+                        <animate
+                          attributeName="r"
+                          from="0"
+                          to="4.5"
+                          begin={`${0.48 + index * 0.08}s`}
+                          dur="0.3s"
+                          fill="freeze"
+                        />
+                      </circle>
+                      <text x={point.x} y={point.y - 10} textAnchor="middle" fontSize="10" fill="#0f172a" opacity="0">
+                        <animate
+                          attributeName="opacity"
+                          from="0"
+                          to="1"
+                          begin={`${0.55 + index * 0.08}s`}
+                          dur="0.22s"
+                          fill="freeze"
+                        />
                         {Math.round(point.value / 1000)}k
                       </text>
                     </g>
@@ -5965,7 +6053,7 @@ export default function Page() {
             ) : null}
             {activeSection === "kalkulator-potongan" ? (
             <SelectInput label="Fee Tokopedia Mall (%)" value={mallFee} onChange={setMallFee}>
-              { ["3","3.7","6.95","7.2","7.75","8.2","9.2","10.2","11.7","12.2"].map((v)=> <option key={v} value={v}>{v}%</option>) }
+              { ["3","3.7","5.95","6.95","7.2","7.75","8.2","9.2","11.7","12.2"].map((v)=> <option key={v} value={v}>{v}%</option>) }
             </SelectInput>
             ) : null}
           </div>
