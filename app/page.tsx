@@ -1463,9 +1463,13 @@ export default function Page() {
   const loadInvoiceHistory = useCallback(async () => {
     setInvoiceHistoryLoading(true);
     try {
+      const retentionCutoff = new Date();
+      retentionCutoff.setUTCDate(retentionCutoff.getUTCDate() - 365);
+      const retentionCutoffIso = retentionCutoff.toISOString();
       const primaryQuery = await supabase
         .from("sales_documents")
         .select("id, public_token, document_no, document_type, invoice_date, buyer, subtotal, grand_total, created_at")
+        .gte("created_at", retentionCutoffIso)
         .order("created_at", { ascending: false })
         .limit(300);
       let data: unknown[] | null = Array.isArray(primaryQuery.data) ? primaryQuery.data : null;
@@ -1476,6 +1480,7 @@ export default function Page() {
         const legacyQuery = await supabase
           .from("sales_documents")
           .select("id, public_token, document_no, document_type, invoice_date, buyer, subtotal, created_at")
+          .gte("created_at", retentionCutoffIso)
           .order("created_at", { ascending: false })
           .limit(300);
         data = Array.isArray(legacyQuery.data) ? legacyQuery.data : null;
@@ -2198,9 +2203,7 @@ export default function Page() {
       invoiceTaxMode === "include"
         ? "* Harga diatas sudah termasuk Faktur Pajak."
         : "* Harga diatas belum termasuk Faktur Pajak (PPN ditambahkan terpisah).";
-    const hasBuyerBox = Boolean(
-      buyerValue || phoneValue || whatsappValue || addressValue || (invoiceDocType === "penawaran" && salesPicValue)
-    );
+    const hasBuyerBox = Boolean(buyerValue || phoneValue || whatsappValue || addressValue);
     const signVisuals = invoiceIncludeSignAndStamp
       ? `<img class="stamp" src="${logoUrl}" alt="Cap Starcomp" />
                 <img class="signature" src="${signatureUrl}" alt="Tanda tangan" />`
@@ -2352,6 +2355,11 @@ export default function Page() {
           <div class="meta${hasBuyerBox ? "" : " single"}">
             <div class="box">
               <p><strong>${docNoLabel}:</strong> ${generatedInvoiceNo}</p>
+              ${
+                invoiceDocType === "penawaran" && salesPicValue
+                  ? `<p><strong>PIC Sales:</strong> ${salesPicValue}</p>`
+                  : ""
+              }
               <p><strong>Tanggal Cetak:</strong> ${printDate}</p>
               ${
                 invoiceDocType === "penawaran"
@@ -2367,11 +2375,6 @@ export default function Page() {
               ${phoneValue ? `<p><strong>Telepon:</strong> ${phoneValue}</p>` : ""}
               ${whatsappValue ? `<p><strong>WhatsApp:</strong> ${whatsappValue}</p>` : ""}
               ${addressValue ? `<p><strong>Alamat:</strong> ${addressValue}</p>` : ""}
-              ${
-                invoiceDocType === "penawaran" && salesPicValue
-                  ? `<p><strong>PIC Sales:</strong> ${salesPicValue}</p>`
-                  : ""
-              }
             </div>`
                 : ""
             }

@@ -5,6 +5,7 @@ export const runtime = "nodejs";
 const FIXED_ADMIN_EMAIL = String(
   process.env.FIXED_ADMIN_EMAIL || "luluklisdiantoro535@gmail.com"
 ).trim().toLowerCase();
+const SALES_DOCUMENT_RETENTION_DAYS = 365;
 
 function getBearerToken(request: NextRequest) {
   const authHeader = request.headers.get("authorization") || request.headers.get("Authorization") || "";
@@ -27,6 +28,75 @@ function isMissingTaxColumnError(message: string) {
   );
 }
 
+type SalesDocumentItem = {
+  nama: string;
+  qty: number;
+  harga: number;
+};
+
+type LegacyDocumentMeta = {
+  discountAmount?: number;
+  taxEnabled?: boolean;
+  taxMode?: "exclude" | "include";
+  taxRate?: number;
+  taxAmount?: number;
+  grandTotal?: number;
+  subtotalBeforeDiscount?: number;
+};
+
+const LEGACY_META_PREFIX = "[[DOC_META:";
+const LEGACY_META_SUFFIX = "]]";
+
+function normalizeItems(items: unknown): SalesDocumentItem[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const rec = item as Record<string, unknown>;
+      const nama = String(rec.nama || "").trim();
+      const qty = Math.max(0, Number(rec.qty) || 0);
+      const harga = Math.max(0, Number(rec.harga) || 0);
+      if (!nama || qty <= 0) return null;
+      return { nama, qty, harga };
+    })
+    .filter((item): item is SalesDocumentItem => Boolean(item));
+}
+
+function parseLegacyMetaFromNotes(notes: unknown) {
+  const text = String(notes || "");
+  const start = text.indexOf(LEGACY_META_PREFIX);
+  if (start < 0) return { cleanNotes: text.trim(), meta: null as LegacyDocumentMeta | null };
+  const jsonStart = start + LEGACY_META_PREFIX.length;
+  const end = text.indexOf(LEGACY_META_SUFFIX, jsonStart);
+  if (end < 0) return { cleanNotes: text.trim(), meta: null as LegacyDocumentMeta | null };
+
+  const cleanNotes = `${text.slice(0, start)}${text.slice(end + LEGACY_META_SUFFIX.length)}`.trim();
+  const rawJson = text.slice(jsonStart, end).trim();
+  try {
+    const parsed = JSON.parse(rawJson) as LegacyDocumentMeta;
+    return { cleanNotes, meta: parsed };
+  } catch {
+    return { cleanNotes: text.trim(), meta: null as LegacyDocumentMeta | null };
+  }
+}
+
+function getSalesDocumentRetentionCutoffIso() {
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - SALES_DOCUMENT_RETENTION_DAYS);
+  return cutoff.toISOString();
+}
+
+async function cleanupExpiredSalesDocuments(supabaseAdmin: ReturnType<typeof getSupabaseAdmin>) {
+  const cutoffIso = getSalesDocumentRetentionCutoffIso();
+  const { error } = await supabaseAdmin
+    .from("sales_documents")
+    .delete()
+    .lt("created_at", cutoffIso);
+  if (error) {
+    console.error(`[sales-documents/token] cleanup expired docs gagal: ${error.message}`);
+  }
+}
+
 export async function GET(_request: NextRequest, context: { params: Promise<{ token: string }> }) {
   try {
     const { token } = await context.params;
@@ -36,6 +106,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
     }
 
     const supabaseAdmin = getSupabaseAdmin();
+    await cleanupExpiredSalesDocuments(supabaseAdmin);
     let { data, error } = await supabaseAdmin
       .from("sales_documents")
       .select(
@@ -95,19 +166,38 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
       return NextResponse.json({ ok: false, error: "Dokumen tidak ditemukan." }, { status: 404 });
     }
 
-    const subtotal = Math.max(0, Number(data.subtotal) || 0);
-    const taxRate = Math.max(0, Number(data.tax_rate) || 11);
-    const taxAmountRaw = Math.max(0, Number(data.tax_amount) || 0);
-    const grandTotalRaw = Math.max(0, Number(data.grand_total) || subtotal);
+    const normalizedItems = normalizeItems(data.items);
+    const { cleanNotes, meta: legacyMeta } = parseLegacyMetaFromNotes(data.notes);
+    const subtotalFromColumn = Math.max(0, Number(data.subtotal) || 0);
+    const subtotalFromItems = normalizedItems.reduce(
+      (acc, item) => acc + Math.max(0, Number(item.qty) || 0) * Math.max(0, Number(item.harga) || 0),
+      0
+    );
+    // Backward compatibility:
+    // beberapa dokumen lama menyimpan subtotal sesudah diskon, jadi kita ambil nilai terbesar
+    // antara subtotal kolom dan hasil penjumlahan item sebagai "subtotal barang" sebelum diskon.
+    const subtotal = Math.max(subtotalFromColumn, subtotalFromItems);
+    const taxRate = Math.max(0, Number(data.tax_rate) || Math.max(0, Number(legacyMeta?.taxRate) || 11));
+    const taxAmountRaw = Math.max(0, Number(data.tax_amount) || Math.max(0, Number(legacyMeta?.taxAmount) || 0));
+    const grandTotalRaw = Math.max(0, Number(data.grand_total) || Math.max(0, Number(legacyMeta?.grandTotal) || subtotal));
     const rawTaxMode = String(data.tax_mode || "").toLowerCase();
-    const inferredTaxEnabledBase = Boolean(data.tax_enabled) || taxAmountRaw > 0 || grandTotalRaw > subtotal + 1;
+    const inferredTaxEnabledBase =
+      Boolean(data.tax_enabled) ||
+      Boolean(legacyMeta?.taxEnabled) ||
+      taxAmountRaw > 0 ||
+      grandTotalRaw > subtotal + 1;
     const inferredTaxModeBase =
       rawTaxMode === "include" || rawTaxMode === "exclude"
         ? rawTaxMode
+        : legacyMeta?.taxMode === "include" || legacyMeta?.taxMode === "exclude"
+          ? legacyMeta.taxMode
         : inferredTaxEnabledBase && Math.abs(grandTotalRaw - subtotal) <= 1 && taxAmountRaw > 0
           ? "include"
           : "exclude";
-    const discountAmountFromColumn = Math.min(subtotal, Math.max(0, Number(data.discount_amount) || 0));
+    const discountAmountFromColumn = Math.min(
+      subtotal,
+      Math.max(0, Number(data.discount_amount) || Math.max(0, Number(legacyMeta?.discountAmount) || 0))
+    );
     const inferredDiscountFromTotals = Math.max(
       0,
       inferredTaxEnabledBase
@@ -149,8 +239,8 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         address: data.address,
         courier: data.courier,
         salesPic: data.sales_pic,
-        notes: data.notes,
-        items: Array.isArray(data.items) ? data.items : [],
+        notes: cleanNotes,
+        items: normalizedItems,
         subtotal,
         discountAmount,
         taxEnabled: inferredTaxEnabled,

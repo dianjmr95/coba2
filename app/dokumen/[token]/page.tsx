@@ -31,6 +31,18 @@ type DocumentRow = {
   grand_total?: number | string;
 };
 
+type LegacyDocumentMeta = {
+  discountAmount?: number;
+  taxEnabled?: boolean;
+  taxMode?: "exclude" | "include";
+  taxRate?: number;
+  taxAmount?: number;
+  grandTotal?: number;
+};
+
+const LEGACY_META_PREFIX = "[[DOC_META:";
+const LEGACY_META_SUFFIX = "]]";
+
 function rupiah(num: number) {
   return `Rp ${Math.round(num || 0).toLocaleString("id-ID")}`;
 }
@@ -59,6 +71,24 @@ function normalizeItems(value: unknown): DocumentItem[] {
       return { nama, qty, harga };
     })
     .filter((item): item is DocumentItem => Boolean(item));
+}
+
+function parseLegacyMetaFromNotes(notes: unknown) {
+  const text = String(notes || "");
+  const start = text.indexOf(LEGACY_META_PREFIX);
+  if (start < 0) return { cleanNotes: text.trim(), meta: null as LegacyDocumentMeta | null };
+  const jsonStart = start + LEGACY_META_PREFIX.length;
+  const end = text.indexOf(LEGACY_META_SUFFIX, jsonStart);
+  if (end < 0) return { cleanNotes: text.trim(), meta: null as LegacyDocumentMeta | null };
+
+  const cleanNotes = `${text.slice(0, start)}${text.slice(end + LEGACY_META_SUFFIX.length)}`.trim();
+  const rawJson = text.slice(jsonStart, end).trim();
+  try {
+    const parsed = JSON.parse(rawJson) as LegacyDocumentMeta;
+    return { cleanNotes, meta: parsed };
+  } catch {
+    return { cleanNotes: text.trim(), meta: null as LegacyDocumentMeta | null };
+  }
 }
 
 function isMissingTaxColumnError(message: string) {
@@ -210,25 +240,37 @@ export default async function DokumenPage({
   }
 
   const items = normalizeItems(data.items);
+  const { cleanNotes, meta: legacyMeta } = parseLegacyMetaFromNotes(data.notes);
   const isPenawaran = data.document_type === "penawaran";
   const docTitle = isPenawaran ? "SURAT PENAWARAN BARANG" : "FAKTUR PENJUALAN";
   const docNoLabel = isPenawaran ? "No Penawaran" : "No Faktur";
   const totalLabel = isPenawaran ? "TOTAL PENAWARAN" : "TOTAL";
-  const subtotal = Math.max(0, Number(data.subtotal) || items.reduce((acc, item) => acc + item.qty * item.harga, 0));
-  const taxRate = hasTaxRateOverride ? includeTaxRateParsed : Math.max(0, Number(data.tax_rate) || 11);
-  const grandTotalRaw = Math.max(0, Number(data.grand_total) || subtotal);
-  const taxAmountRaw = Math.max(0, Number(data.tax_amount) || 0);
+  const subtotalFromColumn = Math.max(0, Number(data.subtotal) || 0);
+  const subtotalFromItems = items.reduce((acc, item) => acc + item.qty * item.harga, 0);
+  // Dokumen lama bisa punya subtotal kolom yang sudah terpotong diskon.
+  // Pakai nilai terbesar agar diskon tetap bisa diinfer dari grand total.
+  const subtotal = Math.max(subtotalFromColumn, subtotalFromItems);
+  const taxRate = hasTaxRateOverride
+    ? includeTaxRateParsed
+    : Math.max(0, Number(data.tax_rate) || Math.max(0, Number(legacyMeta?.taxRate) || 11));
+  const grandTotalRaw = Math.max(0, Number(data.grand_total) || Math.max(0, Number(legacyMeta?.grandTotal) || subtotal));
+  const taxAmountRaw = Math.max(0, Number(data.tax_amount) || Math.max(0, Number(legacyMeta?.taxAmount) || 0));
   const inferredTaxFromTotals = taxAmountRaw > 0 || grandTotalRaw > subtotal + 1;
-  const taxEnabledFromData = Boolean(data.tax_enabled) || inferredTaxFromTotals;
+  const taxEnabledFromData = Boolean(data.tax_enabled) || Boolean(legacyMeta?.taxEnabled) || inferredTaxFromTotals;
   const taxEnabled = hasTaxOverride ? includeTaxOverride : taxEnabledFromData;
   const taxModeFromData = String(data.tax_mode || "").toLowerCase();
   const inferredTaxModeBase =
     taxModeFromData === "include" || taxModeFromData === "exclude"
       ? taxModeFromData
+      : legacyMeta?.taxMode === "include" || legacyMeta?.taxMode === "exclude"
+        ? legacyMeta.taxMode
       : taxEnabledFromData && Math.abs(grandTotalRaw - subtotal) <= 1 && (taxAmountRaw > 0 || inferredTaxFromTotals)
         ? "include"
         : "exclude";
-  const discountAmountFromData = Math.min(subtotal, Math.max(0, Number(data.discount_amount) || 0));
+  const discountAmountFromData = Math.min(
+    subtotal,
+    Math.max(0, Number(data.discount_amount) || Math.max(0, Number(legacyMeta?.discountAmount) || 0))
+  );
   const inferredDiscountFromTotals = Math.max(
     0,
     taxEnabledFromData
@@ -285,7 +327,7 @@ export default async function DokumenPage({
   const addressValue = String(data.address || "").trim();
   const courierValue = String(data.courier || "").trim();
   const salesPicValue = String(data.sales_pic || "").trim();
-  const hasBuyerBox = Boolean(buyerValue || phoneValue || whatsappValue || addressValue || (isPenawaran && salesPicValue));
+  const hasBuyerBox = Boolean(buyerValue || phoneValue || whatsappValue || addressValue);
   const suratJalanNo = `${data.document_no}/SJ`;
 
   return (
@@ -355,6 +397,7 @@ export default async function DokumenPage({
         <div className={`meta${hasBuyerBox ? "" : " single"}`}>
           <div className="box">
             <p><strong>{docNoLabel}:</strong> {data.document_no}</p>
+            {isPenawaran && salesPicValue ? <p><strong>PIC Sales:</strong> {salesPicValue}</p> : null}
             <p><strong>Tanggal Cetak:</strong> {formatDate(data.invoice_date)}</p>
             {isPenawaran ? <p><strong>Berlaku Sampai:</strong> {formatDate(data.valid_until)}</p> : null}
             {courierValue ? <p><strong>Kurir:</strong> {courierValue}</p> : null}
@@ -365,7 +408,6 @@ export default async function DokumenPage({
               {phoneValue ? <p><strong>Telepon:</strong> {phoneValue}</p> : null}
               {whatsappValue ? <p><strong>WhatsApp:</strong> {whatsappValue}</p> : null}
               {addressValue ? <p><strong>Alamat:</strong> {addressValue}</p> : null}
-              {isPenawaran && salesPicValue ? <p><strong>PIC Sales:</strong> {salesPicValue}</p> : null}
             </div>
           ) : null}
         </div>
@@ -449,7 +491,7 @@ export default async function DokumenPage({
           {totalLabel}: {rupiah(total)}
         </div>
         <div className="notes">
-          <strong>Catatan:</strong> {data.notes || "-"}
+          <strong>Catatan:</strong> {cleanNotes || "-"}
         </div>
         {!isPenawaran && includeBankAccount && bankInfoValue ? (
           <div className="bank-section">
@@ -567,7 +609,7 @@ export default async function DokumenPage({
             </div>
 
             <div className="notes">
-              <strong>Catatan Pengiriman:</strong> {data.notes || "-"}
+              <strong>Catatan Pengiriman:</strong> {cleanNotes || "-"}
             </div>
 
             <div className="delivery-sign">

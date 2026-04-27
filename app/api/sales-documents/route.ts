@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "../../../lib/supabaseAdmin";
 
 export const runtime = "nodejs";
+const SALES_DOCUMENT_RETENTION_DAYS = 365;
 
 type SalesDocumentItem = {
   nama: string;
@@ -32,6 +33,19 @@ type SalesDocumentRequest = {
   grandTotal?: number;
   markPrinted?: boolean;
 };
+
+type LegacyDocumentMeta = {
+  discountAmount?: number;
+  taxEnabled?: boolean;
+  taxMode?: "exclude" | "include";
+  taxRate?: number;
+  taxAmount?: number;
+  grandTotal?: number;
+  subtotalBeforeDiscount?: number;
+};
+
+const LEGACY_META_PREFIX = "[[DOC_META:";
+const LEGACY_META_SUFFIX = "]]";
 
 function normalizeIsoDate(value: string | null | undefined) {
   const raw = String(value || "").trim();
@@ -88,6 +102,45 @@ function isMissingTaxColumnError(message: string) {
   );
 }
 
+function stripLegacyMetaNotes(notes: string) {
+  const trimmed = String(notes || "").trim();
+  const markerIndex = trimmed.indexOf(LEGACY_META_PREFIX);
+  if (markerIndex < 0) return trimmed;
+  return trimmed.slice(0, markerIndex).trim();
+}
+
+function buildLegacyMetaNotes(notes: string, meta: LegacyDocumentMeta) {
+  const baseNotes = stripLegacyMetaNotes(notes);
+  const safeMeta = {
+    discountAmount: Math.max(0, Number(meta.discountAmount) || 0),
+    taxEnabled: Boolean(meta.taxEnabled),
+    taxMode: meta.taxMode === "include" ? "include" : "exclude",
+    taxRate: Math.max(0, Number(meta.taxRate) || 0),
+    taxAmount: Math.max(0, Number(meta.taxAmount) || 0),
+    grandTotal: Math.max(0, Number(meta.grandTotal) || 0),
+    subtotalBeforeDiscount: Math.max(0, Number(meta.subtotalBeforeDiscount) || 0)
+  } satisfies Required<LegacyDocumentMeta>;
+  const metaText = `${LEGACY_META_PREFIX}${JSON.stringify(safeMeta)}${LEGACY_META_SUFFIX}`;
+  return baseNotes ? `${baseNotes}\n${metaText}` : metaText;
+}
+
+function getSalesDocumentRetentionCutoffIso() {
+  const cutoff = new Date();
+  cutoff.setUTCDate(cutoff.getUTCDate() - SALES_DOCUMENT_RETENTION_DAYS);
+  return cutoff.toISOString();
+}
+
+async function cleanupExpiredSalesDocuments(supabaseAdmin: ReturnType<typeof getSupabaseAdmin>) {
+  const cutoffIso = getSalesDocumentRetentionCutoffIso();
+  const { error } = await supabaseAdmin
+    .from("sales_documents")
+    .delete()
+    .lt("created_at", cutoffIso);
+  if (error) {
+    console.error(`[sales-documents] cleanup expired docs gagal: ${error.message}`);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as SalesDocumentRequest;
@@ -124,6 +177,7 @@ export async function POST(request: NextRequest) {
     }
 
     const supabaseAdmin = getSupabaseAdmin();
+    await cleanupExpiredSalesDocuments(supabaseAdmin);
     const bearerToken = getBearerToken(request);
     let authUserId: string | null = null;
     if (bearerToken) {
@@ -172,7 +226,15 @@ export async function POST(request: NextRequest) {
       address: String(body.address || "").trim(),
       courier: String(body.courier || "").trim(),
       sales_pic: documentType === "penawaran" ? String(body.salesPic || "").trim() : "",
-      notes: String(body.notes || "").trim(),
+      notes: buildLegacyMetaNotes(String(body.notes || "").trim(), {
+        discountAmount,
+        taxEnabled,
+        taxMode,
+        taxRate,
+        taxAmount,
+        grandTotal,
+        subtotalBeforeDiscount: subtotal
+      }),
       items,
       subtotal,
       last_printed_at: markPrinted ? new Date().toISOString() : null
