@@ -54,6 +54,7 @@ type SectionId = "kalkulator-potongan" | "compare-harga" | "pembuatan-nota" | "r
 type UserRole = "admin" | "staff" | "staff_offline" | "viewer";
 type InvoiceDocumentType = "faktur" | "penawaran";
 type InvoiceTaxMode = "exclude" | "include";
+type RecapProfitLossPreset = "1bulan" | "3bulan" | "1tahun" | "custom";
 
 type InvoiceItem = {
   id: string;
@@ -88,6 +89,7 @@ type SalesDocumentDetailResponse = {
     notes: string;
     items: Array<{ nama: string; qty: number; harga: number }>;
     subtotal: number;
+    discountAmount?: number;
     taxEnabled: boolean;
     taxRate: number;
     taxAmount: number;
@@ -712,6 +714,43 @@ function cariHargaRekomendasi(targetNet: number, hitungNetDariHarga: (harga: num
   return Number.NaN;
 }
 
+function normalizeOrderNo(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function toInputDate(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addMonths(base: Date, months: number) {
+  const next = new Date(base);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function findRecapOrderNoDuplicates(rows: SalesRecapRow[], noPesanan: string, excludeId?: string) {
+  const normalizedNo = normalizeOrderNo(noPesanan);
+  if (!normalizedNo) return [];
+  return rows.filter((row) => {
+    if (excludeId && row.id === excludeId) return false;
+    return normalizeOrderNo(row.noPesanan) === normalizedNo;
+  });
+}
+
+function buildDuplicateOrderNoWarning(noPesanan: string, duplicateRows: SalesRecapRow[]) {
+  const normalizedNo = noPesanan.trim();
+  const preview = duplicateRows
+    .slice(0, 3)
+    .map((row) => `${row.tanggal} | ${row.marketplace} | ${row.pelanggan || "-"}`)
+    .join("\n- ");
+  const remainCount = Math.max(0, duplicateRows.length - 3);
+  const remainLine = remainCount > 0 ? `\n- +${remainCount} data lainnya` : "";
+  return `No pesanan "${normalizedNo}" sudah ada di rekap (${duplicateRows.length} data):\n- ${preview}${remainLine}\n\nLanjut simpan data ini?`;
+}
+
 function normalizePresetData(value: unknown): PresetData | null {
   if (typeof value !== "object" || value === null) return null;
   const v = value as Record<string, unknown>;
@@ -1052,7 +1091,6 @@ export default function Page() {
   const [presets, setPresets] = useState<PresetItem[]>([]);
   const [presetNotice, setPresetNotice] = useState("");
   const [isPresetSaving, setIsPresetSaving] = useState(false);
-  const importPresetRef = useRef<HTMLInputElement | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>("kalkulator-potongan");
   const [isNavHidden, setIsNavHidden] = useState(true);
   const [authReady, setAuthReady] = useState(false);
@@ -1080,6 +1118,7 @@ export default function Page() {
   const [invoiceBuyer, setInvoiceBuyer] = useState("");
   const [invoicePhone, setInvoicePhone] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
+  const [invoiceDiscountAmount, setInvoiceDiscountAmount] = useState(0);
   const [invoiceTaxEnabled, setInvoiceTaxEnabled] = useState(false);
   const [invoiceTaxMode, setInvoiceTaxMode] = useState<InvoiceTaxMode>("exclude");
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
@@ -1137,6 +1176,9 @@ export default function Page() {
   const [recapFilterStartDate, setRecapFilterStartDate] = useState("");
   const [recapFilterEndDate, setRecapFilterEndDate] = useState("");
   const [recapFilterQuery, setRecapFilterQuery] = useState("");
+  const [recapProfitLossPreset, setRecapProfitLossPreset] = useState<RecapProfitLossPreset>("1bulan");
+  const [recapProfitLossStartDate, setRecapProfitLossStartDate] = useState("");
+  const [recapProfitLossEndDate, setRecapProfitLossEndDate] = useState(toInputDate(new Date()));
   const [recapNotice, setRecapNotice] = useState("");
   const [isRecapSaving, setIsRecapSaving] = useState(false);
   const [recapSyncStatus, setRecapSyncStatus] = useState<"idle" | "saving" | "success" | "error">("idle");
@@ -1705,10 +1747,29 @@ export default function Page() {
     );
   }, [recapOrderItems]);
 
+  const recapDuplicateOrderNoRows = useMemo(
+    () => findRecapOrderNoDuplicates(recapRows, recapNoPesanan),
+    [recapNoPesanan, recapRows]
+  );
+  const editRecapDuplicateOrderNoRows = useMemo(() => {
+    if (!editRecapDraft) return [] as SalesRecapRow[];
+    return findRecapOrderNoDuplicates(recapRows, editRecapDraft.noPesanan, editRecapDraft.id);
+  }, [editRecapDraft, recapRows]);
+
   useEffect(() => {
     setRecapOmzet(recapOrderTotals.omzet);
     setRecapModal(recapOrderTotals.modal);
   }, [recapOrderTotals]);
+
+  useEffect(() => {
+    if (recapProfitLossPreset === "custom") return;
+    const today = new Date();
+    const endDate = toInputDate(today);
+    const monthOffset = recapProfitLossPreset === "1bulan" ? -1 : recapProfitLossPreset === "3bulan" ? -3 : -12;
+    const startDate = toInputDate(addMonths(today, monthOffset));
+    setRecapProfitLossStartDate(startDate);
+    setRecapProfitLossEndDate(endDate);
+  }, [recapProfitLossPreset]);
 
   async function runSupabaseWithRetry<T>(
     task: () => PromiseLike<{ data: T; error: unknown }>,
@@ -1873,92 +1934,6 @@ export default function Page() {
     setIsPresetSaving(false);
   }
 
-  function handleExportPresets() {
-    const payload = JSON.stringify(presets, null, 2);
-    const blob = new Blob([payload], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `preset-potongan-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    setPresetNotice("Preset berhasil diexport.");
-  }
-
-  function handleImportPresets(event: ChangeEvent<HTMLInputElement>) {
-    if (authUser?.role === "viewer" || authUser?.role === "staff_offline") {
-      setPresetNotice("Role ini tidak punya izin import preset.");
-      if (importPresetRef.current) importPresetRef.current.value = "";
-      return;
-    }
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const raw = String(reader.result ?? "").replace(/^\uFEFF/, "").trim();
-        const parsed = JSON.parse(raw) as unknown;
-
-        const sourceList = Array.isArray(parsed)
-          ? parsed
-          : typeof parsed === "object" && parsed !== null && Array.isArray((parsed as { presets?: unknown[] }).presets)
-            ? (parsed as { presets: unknown[] }).presets
-            : typeof parsed === "object" && parsed !== null
-              ? [parsed]
-              : null;
-
-        if (!sourceList) throw new Error("format invalid");
-        if (sourceList.length === 0) {
-          setPresetNotice("File JSON valid, tapi belum berisi preset.");
-          return;
-        }
-
-        const valid: PresetItem[] = sourceList
-          .map((item) => {
-            if (typeof item !== "object" || item === null) return null;
-            const it = item as Record<string, unknown>;
-            const name = typeof it.name === "string" && it.name.trim() ? it.name.trim() : "Preset Import";
-            const data = normalizePresetData(it.data ?? it);
-            if (!data) return null;
-            return {
-              id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-              name,
-              data
-            } satisfies PresetItem;
-          })
-          .filter((item): item is PresetItem => Boolean(item));
-
-        if (!valid.length) {
-          setPresetNotice("File terbaca, tapi tidak ada data preset yang cocok.");
-          return;
-        }
-
-        setIsPresetSaving(true);
-        const payload = valid.map((item) => toPresetDbPayload(item));
-        const { error } = await runSupabaseWithRetry(
-          () => supabase.from(PRESET_SUPABASE_TABLE).insert(payload),
-          2
-        );
-        if (error) {
-          setPresetNotice(formatSupabaseError("Import preset", error));
-          return;
-        }
-
-        await loadPresetsFromSupabase();
-        setPresetNotice(`${valid.length} preset berhasil diimport ke Supabase.`);
-      } catch {
-        setPresetNotice("Import gagal. Pastikan file JSON preset valid.");
-      } finally {
-        setIsPresetSaving(false);
-        if (importPresetRef.current) importPresetRef.current.value = "";
-      }
-    };
-    reader.readAsText(file);
-  }
-
   function addInvoiceItem() {
     setInvoiceItems((prev) => [...prev, { id: `${Date.now()}-${prev.length}`, nama: "", qty: 1, harga: 0 }]);
   }
@@ -1979,6 +1954,7 @@ export default function Page() {
     setInvoiceBuyer("");
     setInvoicePhone("");
     setInvoiceWhatsapp("");
+    setInvoiceDiscountAmount(0);
     setInvoiceTaxEnabled(false);
     setInvoiceTaxMode("exclude");
     setInvoiceIncludeBankAccount(true);
@@ -2000,29 +1976,47 @@ export default function Page() {
     () => invoiceItems.reduce((acc, item) => acc + Math.max(0, item.qty) * Math.max(0, item.harga), 0),
     [invoiceItems]
   );
+  const invoiceDiscountValue = useMemo(
+    () => Math.min(invoiceSubtotal, Math.max(0, Number(invoiceDiscountAmount) || 0)),
+    [invoiceDiscountAmount, invoiceSubtotal]
+  );
+  const invoiceSubtotalAfterDiscount = useMemo(
+    () => Math.max(0, invoiceSubtotal - invoiceDiscountValue),
+    [invoiceSubtotal, invoiceDiscountValue]
+  );
   const invoiceTaxRate = 11;
   const invoiceDppSubtotal = useMemo(() => {
-    if (!invoiceTaxEnabled || invoiceTaxMode === "exclude") return invoiceSubtotal;
-    return Math.round((invoiceSubtotal * 100) / (100 + invoiceTaxRate));
-  }, [invoiceSubtotal, invoiceTaxEnabled, invoiceTaxMode, invoiceTaxRate]);
+    if (!invoiceTaxEnabled || invoiceTaxMode === "exclude") return invoiceSubtotalAfterDiscount;
+    return Math.round((invoiceSubtotalAfterDiscount * 100) / (100 + invoiceTaxRate));
+  }, [invoiceSubtotalAfterDiscount, invoiceTaxEnabled, invoiceTaxMode, invoiceTaxRate]);
   const invoiceTaxAmount = useMemo(
     () =>
       invoiceTaxEnabled
         ? invoiceTaxMode === "include"
-          ? Math.max(0, invoiceSubtotal - invoiceDppSubtotal)
-          : Math.round((invoiceSubtotal * invoiceTaxRate) / 100)
+          ? Math.max(0, invoiceSubtotalAfterDiscount - invoiceDppSubtotal)
+          : Math.round((invoiceSubtotalAfterDiscount * invoiceTaxRate) / 100)
         : 0,
-    [invoiceSubtotal, invoiceTaxEnabled, invoiceTaxMode, invoiceDppSubtotal]
+    [invoiceSubtotalAfterDiscount, invoiceTaxEnabled, invoiceTaxMode, invoiceDppSubtotal]
   );
   const invoiceDisplaySubtotal = useMemo(
-    () => (invoiceTaxEnabled && invoiceTaxMode === "include" ? invoiceDppSubtotal : invoiceSubtotal),
-    [invoiceTaxEnabled, invoiceTaxMode, invoiceDppSubtotal, invoiceSubtotal]
+    () => (invoiceTaxEnabled && invoiceTaxMode === "include" ? invoiceDppSubtotal : invoiceSubtotalAfterDiscount),
+    [invoiceTaxEnabled, invoiceTaxMode, invoiceDppSubtotal, invoiceSubtotalAfterDiscount]
   );
   const invoiceSubtotalLabel = invoiceTaxEnabled && invoiceTaxMode === "include" ? "Subtotal (DPP)" : "Subtotal";
   const invoiceGrandTotal = useMemo(
-    () => (invoiceTaxEnabled ? (invoiceTaxMode === "include" ? invoiceSubtotal : invoiceSubtotal + invoiceTaxAmount) : invoiceSubtotal),
-    [invoiceSubtotal, invoiceTaxAmount, invoiceTaxEnabled, invoiceTaxMode]
+    () =>
+      invoiceTaxEnabled
+        ? invoiceTaxMode === "include"
+          ? invoiceSubtotalAfterDiscount
+          : invoiceSubtotalAfterDiscount + invoiceTaxAmount
+        : invoiceSubtotalAfterDiscount,
+    [invoiceSubtotalAfterDiscount, invoiceTaxAmount, invoiceTaxEnabled, invoiceTaxMode]
   );
+
+  useEffect(() => {
+    setInvoiceDiscountAmount((prev) => Math.min(Math.max(0, Number(prev) || 0), Math.max(0, Math.round(invoiceSubtotal))));
+  }, [invoiceSubtotal]);
+
   const filteredInvoiceHistory = useMemo(() => {
     const buyerNeedle = invoiceHistoryBuyerQuery.trim().toLowerCase();
     return invoiceHistoryRows.filter((row) => {
@@ -2121,6 +2115,7 @@ export default function Page() {
           notes: invoiceNotes,
           items: normalizedItems,
           subtotal: invoiceSubtotal,
+          discountAmount: invoiceDiscountValue,
           taxEnabled: invoiceTaxEnabled,
           taxMode: invoiceTaxMode,
           taxRate: invoiceTaxRate,
@@ -2398,10 +2393,22 @@ export default function Page() {
           ${
             invoiceTaxEnabled
               ? `<div style="margin-top:8px;display:grid;gap:3px;font-size:10px;">
+                  ${
+                    invoiceDiscountValue > 0
+                      ? `<div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal Barang</span><strong>${rupiah(invoiceSubtotal)}</strong></div>
+                         <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Diskon</span><strong>-${rupiah(invoiceDiscountValue)}</strong></div>`
+                      : ""
+                  }
                   <div style="display:flex;justify-content:flex-end;gap:8px;"><span>${invoiceSubtotalLabel}</span><strong>${rupiah(invoiceDisplaySubtotal)}</strong></div>
                   <div style="display:flex;justify-content:flex-end;gap:8px;"><span>PPN (${taxRateLabel}%)</span><strong>${rupiah(invoiceTaxAmount)}</strong></div>
                 </div>`
-              : ""
+              : invoiceDiscountValue > 0
+                ? `<div style="margin-top:8px;display:grid;gap:3px;font-size:10px;">
+                    <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal Barang</span><strong>${rupiah(invoiceSubtotal)}</strong></div>
+                    <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Diskon</span><strong>-${rupiah(invoiceDiscountValue)}</strong></div>
+                    <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal</span><strong>${rupiah(invoiceSubtotalAfterDiscount)}</strong></div>
+                  </div>`
+                : ""
           }
           <div class="total">${totalLabel}: ${rupiah(invoiceGrandTotal)}</div>
           <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
@@ -2505,6 +2512,7 @@ export default function Page() {
       includeTaxMode: invoiceTaxMode,
       includeTaxRate: String(invoiceTaxRate),
       includeTaxAmount: String(invoiceTaxAmount),
+      includeDiscountAmount: String(invoiceDiscountValue),
       includeSJ: invoiceIncludeSuratJalan ? "1" : "0"
     });
     return `${window.location.origin}/dokumen/${publicToken}?${params.toString()}`;
@@ -2566,11 +2574,20 @@ export default function Page() {
       "",
       ...(invoiceTaxEnabled
         ? [
+            ...(invoiceDiscountValue > 0
+              ? [`Subtotal Barang: ${rupiah(invoiceSubtotal)}`, `Diskon: -${rupiah(invoiceDiscountValue)}`]
+              : []),
             `${invoiceSubtotalLabel}: ${rupiah(invoiceDisplaySubtotal)}`,
             `PPN ${invoiceTaxRate}%: ${rupiah(invoiceTaxAmount)}`,
             `Mode PPN: ${invoiceTaxMode === "include" ? "Sudah termasuk PPN" : "PPN ditambahkan"}`
           ]
-        : []),
+        : invoiceDiscountValue > 0
+          ? [
+              `Subtotal Barang: ${rupiah(invoiceSubtotal)}`,
+              `Diskon: -${rupiah(invoiceDiscountValue)}`,
+              `Subtotal: ${rupiah(invoiceSubtotalAfterDiscount)}`
+            ]
+          : []),
       `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceGrandTotal)}*`,
       `Catatan: ${invoiceNotes || "-"}`,
       `Link dokumen: ${getDocumentShareUrl(savedDoc.publicToken)}`
@@ -2706,6 +2723,12 @@ export default function Page() {
       setInvoiceAddress(detail.address || "");
       setInvoiceCourier(detail.courier || "");
       setInvoiceNotes(detail.notes || "");
+      setInvoiceDiscountAmount(
+        Math.min(
+          Math.max(0, Number(detail.subtotal) || 0),
+          Math.max(0, Number(detail.discountAmount) || 0)
+        )
+      );
       setInvoiceTaxEnabled(Boolean(detail.taxEnabled));
       const detailTaxMode =
         detail.taxMode === "include" || detail.taxMode === "exclude"
@@ -2755,17 +2778,41 @@ export default function Page() {
     let includeTaxMode = invoiceTaxMode;
     let includeTaxRate = String(invoiceTaxRate);
     let includeTaxAmount = String(invoiceTaxEnabled ? invoiceTaxAmount : 0);
+    let includeDiscountAmount = String(invoiceDiscountValue);
     try {
       const response = await fetch(`/api/sales-documents/${publicToken}`);
       const payload = (await response.json()) as SalesDocumentDetailResponse;
       if (response.ok && payload.ok && payload.data) {
         const detail = payload.data;
         const subtotal = Math.max(0, Number(detail.subtotal) || 0);
-        if (invoiceTaxEnabled) {
+        const detailTaxEnabled = Boolean(detail.taxEnabled);
+        const detailTaxMode = detail.taxMode === "include" ? "include" : "exclude";
+        const detailTaxRate = Math.max(0, Number(detail.taxRate) || invoiceTaxRate);
+        const detailTaxAmount = Math.max(0, Number(detail.taxAmount) || 0);
+        const detailGrandTotal = Math.max(0, Number(detail.grandTotal) || 0);
+        const discountFromData = Math.min(subtotal, Math.max(0, Number(detail.discountAmount) || 0));
+        const inferredDiscountFromTotals = Math.max(
+          0,
+          detailTaxEnabled
+            ? detailTaxMode === "exclude"
+              ? subtotal + detailTaxAmount - detailGrandTotal
+              : subtotal - detailGrandTotal
+            : subtotal - detailGrandTotal
+        );
+        const discount = Math.min(
+          subtotal,
+          discountFromData > 0 ? discountFromData : inferredDiscountFromTotals
+        );
+        const subtotalAfterDiscount = Math.max(0, subtotal - discount);
+        includeTax = detailTaxEnabled ? "1" : "0";
+        includeTaxMode = detailTaxMode;
+        includeTaxRate = String(detailTaxRate);
+        includeDiscountAmount = String(discount);
+        if (detailTaxEnabled) {
           const computedTax =
-            invoiceTaxMode === "include"
-              ? Math.max(0, subtotal - Math.round((subtotal * 100) / (100 + invoiceTaxRate)))
-              : Math.max(0, Math.round((subtotal * invoiceTaxRate) / 100));
+            detailTaxMode === "include"
+              ? Math.max(0, subtotalAfterDiscount - Math.round((subtotalAfterDiscount * 100) / (100 + detailTaxRate)))
+              : Math.max(0, Math.round((subtotalAfterDiscount * detailTaxRate) / 100));
           includeTaxAmount = String(computedTax);
         } else {
           includeTaxAmount = "0";
@@ -2782,6 +2829,7 @@ export default function Page() {
       includeTaxMode,
       includeTaxRate,
       includeTaxAmount,
+      includeDiscountAmount,
       includeSJ: invoiceIncludeSuratJalan ? "1" : "0"
     });
     const url = `/dokumen/${publicToken}?${params.toString()}`;
@@ -3409,6 +3457,17 @@ export default function Page() {
     }
     if (isRecapSaving) return false;
 
+    const duplicateOrderNoRows = findRecapOrderNoDuplicates(recapRows, recapNoPesanan);
+    if (duplicateOrderNoRows.length) {
+      const shouldContinue = window.confirm(buildDuplicateOrderNoWarning(recapNoPesanan, duplicateOrderNoRows));
+      if (!shouldContinue) {
+        setRecapSyncStatus("error");
+        setRecapSyncMessage("No pesanan duplikat. Penyimpanan dibatalkan.");
+        setRecapNotice("No pesanan terdeteksi duplikat. Silakan cek ulang sebelum simpan.");
+        return false;
+      }
+    }
+
     setIsRecapSaving(true);
     setRecapNotice("");
     setRecapSyncStatus("saving");
@@ -3767,6 +3826,17 @@ export default function Page() {
       catatan: editRecapDraft.catatan
     };
 
+    const duplicateOrderNoRows = findRecapOrderNoDuplicates(recapRows, updatedRow.noPesanan, updatedRow.id);
+    if (duplicateOrderNoRows.length) {
+      const shouldContinue = window.confirm(buildDuplicateOrderNoWarning(updatedRow.noPesanan, duplicateOrderNoRows));
+      if (!shouldContinue) {
+        const message = "No pesanan duplikat. Perubahan dibatalkan, silakan cek ulang sebelum simpan.";
+        setRecapNotice(message);
+        setEditRecapNotice(message);
+        return;
+      }
+    }
+
     setIsEditRecapSaving(true);
     setEditRecapNotice("Memproses simpan perubahan...");
     try {
@@ -3990,9 +4060,14 @@ export default function Page() {
   }
 
   function exportRecapPdf() {
+    if (!isRecapProfitLossDateRangeValid) {
+      setRecapNotice("Export PDF dibatalkan: rentang tanggal laba rugi tidak valid.");
+      return;
+    }
+
     const byPeriodRows = recapRows.filter((row) => {
-      const passStartDate = recapFilterStartDate ? row.tanggal >= recapFilterStartDate : true;
-      const passEndDate = recapFilterEndDate ? row.tanggal <= recapFilterEndDate : true;
+      const passStartDate = recapProfitLossStartDate ? row.tanggal >= recapProfitLossStartDate : true;
+      const passEndDate = recapProfitLossEndDate ? row.tanggal <= recapProfitLossEndDate : true;
       return passStartDate && passEndDate;
     });
 
@@ -4047,8 +4122,8 @@ export default function Page() {
       return idDateFormatter.format(date);
     };
     const periodLabel =
-      recapFilterStartDate || recapFilterEndDate
-        ? `${formatDate(recapFilterStartDate)} s/d ${formatDate(recapFilterEndDate)}`
+      recapProfitLossStartDate || recapProfitLossEndDate
+        ? `${formatDate(recapProfitLossStartDate)} s/d ${formatDate(recapProfitLossEndDate)}`
         : "Semua tanggal";
     const escapeHtml = (value: string) =>
       value
@@ -4083,51 +4158,90 @@ export default function Page() {
       })
       .join("");
 
+    const logoUrl = `${window.location.origin}/starcomp-logo.png`;
+    const reportNo = `RKP-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`;
     const html = `<!doctype html>
     <html>
       <head>
         <meta charset="utf-8" />
-        <title>Rekap Penjualan PDF</title>
+        <title>Laporan Rekap Penjualan ${reportNo}</title>
         <style>
-          body { font-family: Arial, sans-serif; color: #0f172a; margin: 20px; }
-          h1 { margin: 0 0 4px; font-size: 20px; }
-          p { margin: 0 0 4px; font-size: 12px; color: #334155; }
-          .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 14px 0; }
-          .box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 8px; }
-          .box b { display: block; font-size: 13px; margin-top: 4px; color: #0f172a; }
-          .market { margin: 12px 0; }
-          .market table { width: 100%; border-collapse: collapse; }
-          .market th, .market td { border: 1px solid #e2e8f0; padding: 6px 8px; font-size: 12px; text-align: left; }
-          .market td.num, .data td.num { text-align: right; }
-          .data { width: 100%; border-collapse: collapse; margin-top: 12px; }
-          .data th, .data td { border: 1px solid #e2e8f0; padding: 6px 8px; font-size: 11px; vertical-align: top; }
-          .data thead { background: #f1f5f9; }
-          .data td.num, .data th.num { text-align: right; }
+          @page { size: A4 landscape; margin: 12mm; }
+          body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 11px; }
+          .sheet { width: 100%; }
+          .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 8px; }
+          .company h1 { margin: 0; font-size: 26px; line-height: 1.02; letter-spacing: 0.01em; }
+          .company p { margin: 1px 0 0; font-size: 10px; color: #222; }
+          .company .address { max-width: 520px; color: #333; }
+          .logo { width: 210px; max-width: 100%; height: auto; object-fit: contain; }
+          .title { text-align: center; margin: 8px 0 10px; }
+          .title h2 { margin: 0; font-size: 17px; letter-spacing: 0.09em; }
+          .title p { margin: 2px 0 0; font-size: 10px; color: #374151; }
+          .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+          .box { border: 1px solid #999; border-radius: 4px; padding: 6px 8px; }
+          .box p { margin: 0 0 3px; font-size: 10px; }
+          .section-title { margin: 10px 0 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: #374151; }
+          .summary { display: grid; grid-template-columns: repeat(9, minmax(120px, 1fr)); gap: 6px; margin-bottom: 8px; }
+          .summary .box b { display: block; margin-top: 3px; font-size: 12px; color: #111; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { border: 1px solid #999; padding: 5px 6px; font-size: 10px; vertical-align: top; }
+          th { background: #f3f4f6; font-weight: 700; }
+          td.num, th.num { text-align: right; }
           .cancel-row td { background: #fff1f2; }
-          .status-badge { display: inline-block; border-radius: 999px; padding: 2px 8px; font-size: 10px; font-weight: 700; }
+          .status-badge { display: inline-block; border-radius: 999px; padding: 2px 7px; font-size: 9px; font-weight: 700; }
           .status-success { background: #dcfce7; color: #166534; }
           .status-cancel { background: #ffe4e6; color: #be123c; }
           .neg { color: #be123c; }
+          .approval { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 14px; }
+          .approval-box { text-align: center; font-size: 10px; }
+          .approval-sign-space { height: 54px; }
+          .footer-note { margin-top: 8px; font-size: 9px; color: #4b5563; text-align: right; }
         </style>
       </head>
       <body>
-        <h1>Rekap Penjualan Marketplace</h1>
-        <p>Periode: <strong>${escapeHtml(periodLabel)}</strong></p>
-        <p>Tanggal cetak: ${escapeHtml(idDateFormatter.format(new Date()))}</p>
+        <div class="sheet">
+          <div class="header">
+            <div class="company">
+              <h1>STARCOMP SOLO</h1>
+              <p>Computer Store</p>
+              <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+              <p>No. Telp/WA: 08112642352</p>
+            </div>
+            <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
+          </div>
 
-        <div class="summary">
-          <div class="box">Total Transaksi<b>${byPeriodRows.length}</b></div>
-          <div class="box">Transaksi Sukses<b>${summary.transaksiSukses}</b></div>
-          <div class="box">Transaksi Cancel<b>${cancelRows.length}</b></div>
-          <div class="box">Total Omzet<b>${rupiah(summary.omzet)}</b></div>
-          <div class="box">Total Modal<b>${rupiah(summary.modal)}</b></div>
-          <div class="box">Total Biaya<b>${rupiah(summary.biaya)}</b></div>
-          <div class="box">Laba Bersih<b class="${summary.laba < 0 ? "neg" : ""}">${rupiah(summary.laba)}</b></div>
-          <div class="box">Biaya Cancel<b class="${totalBiayaCancel > 0 ? "neg" : ""}">${rupiah(totalBiayaCancel)}</b></div>
-          <div class="box">Laba Final<b class="${labaFinal < 0 ? "neg" : ""}">${rupiah(labaFinal)}</b></div>
-        </div>
+          <div class="title">
+            <h2>LAPORAN REKAP PENJUALAN MARKETPLACE</h2>
+            <p>Periode: ${escapeHtml(periodLabel)} | Tanggal Cetak: ${escapeHtml(idDateFormatter.format(new Date()))}</p>
+          </div>
 
-        <div class="market">
+          <div class="meta">
+            <div class="box">
+              <p><strong>No. Laporan:</strong> ${reportNo}</p>
+              <p><strong>Rentang Tanggal:</strong> ${escapeHtml(periodLabel)}</p>
+              <p><strong>Total Data:</strong> ${byPeriodRows.length} transaksi</p>
+            </div>
+            <div class="box">
+              <p><strong>Transaksi Sukses:</strong> ${summary.transaksiSukses}</p>
+              <p><strong>Transaksi Cancel:</strong> ${cancelRows.length}</p>
+              <p><strong>Jenis Laporan:</strong> Ringkasan dan Detail Laba Rugi</p>
+            </div>
+          </div>
+
+          <div class="section-title">RINGKASAN LABA RUGI</div>
+          <div class="summary">
+            <div class="box">Total Transaksi<b>${byPeriodRows.length}</b></div>
+            <div class="box">Transaksi Sukses<b>${summary.transaksiSukses}</b></div>
+            <div class="box">Transaksi Cancel<b>${cancelRows.length}</b></div>
+            <div class="box">Total Omzet<b>${rupiah(summary.omzet)}</b></div>
+            <div class="box">Total Modal<b>${rupiah(summary.modal)}</b></div>
+            <div class="box">Total Biaya<b>${rupiah(summary.biaya)}</b></div>
+            <div class="box">Laba Bersih<b class="${summary.laba < 0 ? "neg" : ""}">${rupiah(summary.laba)}</b></div>
+            <div class="box">Biaya Cancel<b class="${totalBiayaCancel > 0 ? "neg" : ""}">${rupiah(totalBiayaCancel)}</b></div>
+            <div class="box">Laba Final<b class="${labaFinal < 0 ? "neg" : ""}">${rupiah(labaFinal)}</b></div>
+          </div>
+
+          <div class="section-title">RINCIAN PER MARKETPLACE</div>
           <table>
             <thead>
               <tr>
@@ -4145,33 +4259,60 @@ export default function Page() {
               <tr><td>TikTok</td><td class="num">${byMarketplace.TikTok.transaksi}</td><td class="num">${byMarketplace.TikTok.cancel}</td><td class="num">${rupiah(byMarketplace.TikTok.biayaCancel)}</td><td class="num">${rupiah(byMarketplace.TikTok.omzet)}</td><td class="num ${byMarketplace.TikTok.laba < 0 ? "neg" : ""}">${rupiah(byMarketplace.TikTok.laba)}</td></tr>
             </tbody>
           </table>
+
+          <div class="section-title">DETAIL TRANSAKSI</div>
+          <table>
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>Tanggal</th>
+                <th>Marketplace</th>
+                <th>Status</th>
+                <th>No Pesanan</th>
+                <th>Pelanggan</th>
+                <th class="num">Omzet</th>
+                <th class="num">Modal</th>
+                <th class="num">Biaya</th>
+                <th class="num">Biaya Cancel</th>
+                <th class="num">Laba (Sukses)</th>
+                <th class="num">Laba Final</th>
+                <th>Catatan</th>
+                <th>Alasan Cancel</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+
+          <div class="approval">
+            <div class="approval-box">
+              <div>Mengetahui,</div>
+              <div class="approval-sign-space"></div>
+              <div><strong>Manager Operasional</strong></div>
+            </div>
+            <div class="approval-box">
+              <div>Disusun oleh,</div>
+              <div class="approval-sign-space"></div>
+              <div><strong>Admin Rekap Penjualan</strong></div>
+            </div>
+          </div>
+          <div class="footer-note">Dokumen ini dihasilkan otomatis dari sistem rekap penjualan Starcomp Solo.</div>
         </div>
 
-        <table class="data">
-          <thead>
-            <tr>
-              <th>No</th>
-              <th>Tanggal</th>
-              <th>Marketplace</th>
-              <th>Status</th>
-              <th>No Pesanan</th>
-              <th>Pelanggan</th>
-              <th class="num">Omzet</th>
-              <th class="num">Modal</th>
-              <th class="num">Biaya</th>
-              <th class="num">Biaya Cancel</th>
-              <th class="num">Laba (Sukses)</th>
-              <th class="num">Laba Final</th>
-              <th>Catatan</th>
-              <th>Alasan Cancel</th>
-            </tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-
         <script>
-          window.onload = function () { setTimeout(function () { window.print(); }, 120); };
-        </script>
+          (function () {
+            const images = Array.from(document.images || []);
+            const waitImages = images.map((img) => {
+              if (img.complete) return Promise.resolve();
+              return new Promise((resolve) => {
+                img.addEventListener("load", resolve, { once: true });
+                img.addEventListener("error", resolve, { once: true });
+              });
+            });
+            Promise.all(waitImages).finally(() => {
+              setTimeout(() => window.print(), 120);
+            });
+          })();
+        <\/script>
       </body>
     </html>`;
 
@@ -4221,6 +4362,72 @@ export default function Page() {
     const cancelRate = transaksi > 0 ? (transaksiCancel / transaksi) * 100 : 0;
     return { omzet, modal, ongkir, laba, labaFinal, totalBiayaCancel, transaksi, transaksiSukses, transaksiCancel, cancelRate };
   }, [filteredRecapRows]);
+
+  const recapProfitLossRows = useMemo(() => {
+    const start = recapProfitLossStartDate;
+    const end = recapProfitLossEndDate;
+    if (start && end && start > end) return [] as SalesRecapRow[];
+    return recapRows.filter((row) => {
+      const passStart = start ? row.tanggal >= start : true;
+      const passEnd = end ? row.tanggal <= end : true;
+      return passStart && passEnd;
+    });
+  }, [recapRows, recapProfitLossStartDate, recapProfitLossEndDate]);
+
+  const isRecapProfitLossDateRangeValid = useMemo(() => {
+    if (!recapProfitLossStartDate || !recapProfitLossEndDate) return true;
+    return recapProfitLossStartDate <= recapProfitLossEndDate;
+  }, [recapProfitLossStartDate, recapProfitLossEndDate]);
+
+  const recapProfitLossSummary = useMemo(() => {
+    const suksesRows = recapProfitLossRows.filter((row) => row.status === "sukses");
+    const cancelRows = recapProfitLossRows.filter((row) => row.status === "cancel");
+    const omzet = suksesRows.reduce((acc, row) => acc + row.omzet, 0);
+    const modal = suksesRows.reduce((acc, row) => acc + row.modal, 0);
+    const ongkir = suksesRows.reduce((acc, row) => acc + row.ongkir, 0);
+    const totalBiayaCancel = cancelRows.reduce((acc, row) => acc + Math.max(0, Number(row.nominalCancel) || 0), 0);
+    const labaKotor = omzet - modal - ongkir;
+    const labaFinal = labaKotor - totalBiayaCancel;
+    const status = labaFinal >= 0 ? "laba" : "rugi";
+    const margin = omzet > 0 ? (labaFinal / omzet) * 100 : 0;
+    const transaksi = recapProfitLossRows.length;
+    const transaksiSukses = suksesRows.length;
+    const transaksiCancel = cancelRows.length;
+    const cancelRate = transaksi > 0 ? (transaksiCancel / transaksi) * 100 : 0;
+    return {
+      omzet,
+      modal,
+      ongkir,
+      totalBiayaCancel,
+      labaKotor,
+      labaFinal,
+      status,
+      margin,
+      transaksi,
+      transaksiSukses,
+      transaksiCancel,
+      cancelRate
+    };
+  }, [recapProfitLossRows]);
+
+  const recapProfitLossByMarketplace = useMemo(() => {
+    const groups: Record<SalesRecapRow["marketplace"], { transaksi: number; omzet: number; labaFinal: number; biayaCancel: number }> = {
+      Tokopedia: { transaksi: 0, omzet: 0, labaFinal: 0, biayaCancel: 0 },
+      Shopee: { transaksi: 0, omzet: 0, labaFinal: 0, biayaCancel: 0 },
+      TikTok: { transaksi: 0, omzet: 0, labaFinal: 0, biayaCancel: 0 }
+    };
+    for (const row of recapProfitLossRows) {
+      const group = groups[row.marketplace];
+      group.transaksi += 1;
+      if (row.status === "sukses") {
+        group.omzet += row.omzet;
+      }
+      const labaSukses = row.status === "sukses" ? row.omzet - row.modal - row.ongkir : 0;
+      group.labaFinal += labaSukses - Math.max(0, Number(row.nominalCancel) || 0);
+      group.biayaCancel += row.status === "cancel" ? Math.max(0, Number(row.nominalCancel) || 0) : 0;
+    }
+    return groups;
+  }, [recapProfitLossRows]);
 
   const recapByMarketplace = useMemo(() => {
     const groups: Record<SalesRecapRow["marketplace"], { omzet: number; laba: number; transaksi: number; cancel: number; biayaCancel: number }> = {
@@ -5518,7 +5725,7 @@ export default function Page() {
           <div className="mb-4 rounded-2xl border border-stone-200 bg-gradient-to-br from-stone-100/70 to-white p-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Preset Potongan</p>
             {canManagePreset ? (
-              <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+              <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
                 <input
                   type="text"
                   value={presetName}
@@ -5534,6 +5741,14 @@ export default function Page() {
                   className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
                 >
                   {isPresetSaving ? "Menyimpan..." : "Simpan"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUpdatePreset}
+                  disabled={isPresetSaving || !selectedPresetId}
+                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Update
                 </button>
               </div>
             ) : null}
@@ -5569,37 +5784,6 @@ export default function Page() {
                 </button>
               ) : null}
             </div>
-            {canManagePreset ? (
-              <div className="mt-2 grid gap-2 md:grid-cols-[auto_auto_1fr]">
-                <button
-                  type="button"
-                  onClick={handleUpdatePreset}
-                  disabled={isPresetSaving}
-                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
-                >
-                  Update
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExportPresets}
-                  disabled={isPresetSaving}
-                  className="rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
-                >
-                  Export JSON
-                </button>
-                <label className="flex cursor-pointer items-center justify-center rounded-2xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100">
-                  Import JSON
-                  <input
-                    ref={importPresetRef}
-                    type="file"
-                    accept="application/json,.json"
-                    onChange={handleImportPresets}
-                    disabled={isPresetSaving}
-                    className="hidden"
-                  />
-                </label>
-              </div>
-            ) : null}
             {presetNotice ? <p className="mt-2 text-xs text-slate-600">{presetNotice}</p> : null}
           </div>
           ) : null}
@@ -6348,14 +6532,47 @@ export default function Page() {
                     );
                   })}
                 </div>
+                <div className="mt-2 grid gap-1.5 text-sm text-slate-600 md:max-w-xs md:ml-auto">
+                  <label className="grid gap-1">
+                    <span>Diskon (Rp)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={Math.max(0, Math.round(invoiceSubtotal))}
+                      value={invoiceDiscountAmount}
+                      onChange={(e) =>
+                        setInvoiceDiscountAmount(
+                          Math.min(Math.max(0, Number(e.target.value || 0)), Math.max(0, Math.round(invoiceSubtotal)))
+                        )
+                      }
+                      className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </label>
+                </div>
                 <div className="mt-2 grid gap-1 text-sm text-slate-700">
                   {invoiceTaxEnabled ? (
                     <>
+                      {invoiceDiscountValue > 0 ? (
+                        <>
+                          <div className="flex justify-end font-medium text-slate-700">Subtotal Barang: {rupiah(invoiceSubtotal)}</div>
+                          <div className="flex justify-end font-medium text-slate-700">Diskon: -{rupiah(invoiceDiscountValue)}</div>
+                        </>
+                      ) : null}
                       <div className="flex justify-end font-semibold text-slate-800">{invoiceSubtotalLabel}: {rupiah(invoiceDisplaySubtotal)}</div>
                       <div className="flex justify-end">PPN {invoiceTaxRate}%: {rupiah(invoiceTaxAmount)}</div>
                     </>
                   ) : (
-                    <div className="flex justify-end font-semibold text-slate-800">Subtotal: {rupiah(invoiceSubtotal)}</div>
+                    <>
+                      {invoiceDiscountValue > 0 ? (
+                        <>
+                          <div className="flex justify-end font-medium text-slate-700">Subtotal Barang: {rupiah(invoiceSubtotal)}</div>
+                          <div className="flex justify-end font-medium text-slate-700">Diskon: -{rupiah(invoiceDiscountValue)}</div>
+                        </>
+                      ) : null}
+                      <div className="flex justify-end font-semibold text-slate-800">
+                        Subtotal: {rupiah(invoiceDiscountValue > 0 ? invoiceSubtotalAfterDiscount : invoiceSubtotal)}
+                      </div>
+                    </>
                   )}
                   <div className="flex justify-end font-bold text-slate-900">
                     Total: {rupiah(invoiceGrandTotal)}
@@ -6746,6 +6963,11 @@ export default function Page() {
             <label className="grid gap-1.5 text-sm text-slate-600">
               <span>No Pesanan</span>
               <input value={recapNoPesanan} onChange={(e) => setRecapNoPesanan(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
+              {recapDuplicateOrderNoRows.length ? (
+                <span className="text-xs text-amber-700">
+                  Peringatan: No pesanan ini sudah ada ({recapDuplicateOrderNoRows.length} data).
+                </span>
+              ) : null}
             </label>
             <label className="grid gap-1.5 text-sm text-slate-600">
               <span>Nama Pelanggan</span>
@@ -7028,6 +7250,146 @@ export default function Page() {
             </div>
           </div>
 
+          <div className="mt-3 rounded-2xl border border-stone-200 bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Rincian Laba Rugi Periode</p>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setRecapProfitLossPreset("1bulan")}
+                  className={`rounded-xl border px-2.5 py-1 text-xs font-medium transition ${
+                    recapProfitLossPreset === "1bulan"
+                      ? "border-stone-700 bg-slate-900 text-white"
+                      : "border-stone-300 bg-white text-slate-700 hover:bg-stone-100"
+                  }`}
+                >
+                  1 Bulan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecapProfitLossPreset("3bulan")}
+                  className={`rounded-xl border px-2.5 py-1 text-xs font-medium transition ${
+                    recapProfitLossPreset === "3bulan"
+                      ? "border-stone-700 bg-slate-900 text-white"
+                      : "border-stone-300 bg-white text-slate-700 hover:bg-stone-100"
+                  }`}
+                >
+                  3 Bulan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecapProfitLossPreset("1tahun")}
+                  className={`rounded-xl border px-2.5 py-1 text-xs font-medium transition ${
+                    recapProfitLossPreset === "1tahun"
+                      ? "border-stone-700 bg-slate-900 text-white"
+                      : "border-stone-300 bg-white text-slate-700 hover:bg-stone-100"
+                  }`}
+                >
+                  1 Tahun
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecapProfitLossPreset("custom")}
+                  className={`rounded-xl border px-2.5 py-1 text-xs font-medium transition ${
+                    recapProfitLossPreset === "custom"
+                      ? "border-stone-700 bg-slate-900 text-white"
+                      : "border-stone-300 bg-white text-slate-700 hover:bg-stone-100"
+                  }`}
+                >
+                  Custom
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <label className="grid gap-1 text-xs text-slate-600">
+                <span>Dari Tanggal (Periode Laba Rugi)</span>
+                <input
+                  type="date"
+                  value={recapProfitLossStartDate}
+                  onChange={(e) => {
+                    setRecapProfitLossPreset("custom");
+                    setRecapProfitLossStartDate(e.target.value);
+                  }}
+                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-slate-600">
+                <span>Sampai Tanggal (Periode Laba Rugi)</span>
+                <input
+                  type="date"
+                  value={recapProfitLossEndDate}
+                  onChange={(e) => {
+                    setRecapProfitLossPreset("custom");
+                    setRecapProfitLossEndDate(e.target.value);
+                  }}
+                  className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                />
+              </label>
+            </div>
+            {!isRecapProfitLossDateRangeValid ? (
+              <p className="mt-2 text-xs text-rose-600">
+                Rentang tanggal tidak valid. Tanggal akhir harus sama atau setelah tanggal awal.
+              </p>
+            ) : null}
+            <div className="mt-2 grid gap-2 md:grid-cols-4">
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Total Transaksi</p>
+                <p className="font-semibold text-slate-900">{recapProfitLossSummary.transaksi}</p>
+              </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Omzet (Sukses)</p>
+                <p className="font-semibold text-slate-900">{rupiah(recapProfitLossSummary.omzet)}</p>
+              </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Laba Kotor</p>
+                <p className={recapProfitLossSummary.labaKotor >= 0 ? "font-semibold text-slate-900" : "font-semibold text-rose-600"}>
+                  {rupiah(recapProfitLossSummary.labaKotor)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Laba Final (Status)</p>
+                <p className={recapProfitLossSummary.labaFinal >= 0 ? "font-semibold text-emerald-700" : "font-semibold text-rose-700"}>
+                  {rupiah(recapProfitLossSummary.labaFinal)} ({recapProfitLossSummary.status === "laba" ? "Laba" : "Rugi"})
+                </p>
+              </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Margin Final</p>
+                <p className={recapProfitLossSummary.margin >= 0 ? "font-semibold text-slate-900" : "font-semibold text-rose-600"}>
+                  {recapProfitLossSummary.margin.toFixed(2)}%
+                </p>
+              </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Biaya Cancel</p>
+                <p className="font-semibold text-rose-700">{rupiah(recapProfitLossSummary.totalBiayaCancel)}</p>
+              </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Cancel Rate</p>
+                <p className="font-semibold text-rose-700">{recapProfitLossSummary.cancelRate.toFixed(1)}%</p>
+              </div>
+              <div className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                <p className="text-xs text-slate-500">Sukses / Cancel</p>
+                <p className="font-semibold text-slate-900">
+                  {recapProfitLossSummary.transaksiSukses} / {recapProfitLossSummary.transaksiCancel}
+                </p>
+              </div>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-3">
+              {(Object.keys(recapProfitLossByMarketplace) as SalesRecapRow["marketplace"][]).map((name) => (
+                <div key={`profit-loss-market-${name}`} className="rounded-xl border border-stone-200 bg-stone-50 px-2.5 py-2 text-sm">
+                  <p className="text-xs font-semibold text-slate-700">{name}</p>
+                  <p className="text-xs text-slate-500">{recapProfitLossByMarketplace[name].transaksi} transaksi</p>
+                  <p className="text-xs text-slate-600">Omzet: <strong className="text-slate-900">{rupiah(recapProfitLossByMarketplace[name].omzet)}</strong></p>
+                  <p className="text-xs text-slate-600">
+                    Laba Final:{" "}
+                    <strong className={recapProfitLossByMarketplace[name].labaFinal >= 0 ? "text-slate-900" : "text-rose-600"}>
+                      {rupiah(recapProfitLossByMarketplace[name].labaFinal)}
+                    </strong>
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="mt-4 grid gap-2 md:grid-cols-7">
             <div className="rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm">
               <p className="text-xs text-slate-500">Total Transaksi</p>
@@ -7294,6 +7656,11 @@ export default function Page() {
                             <span>No Pesanan</span>
                             <input value={editRecapDraft.noPesanan} onChange={(e) => updateEditRecapField("noPesanan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                           </label>
+                          {editRecapDuplicateOrderNoRows.length ? (
+                            <p className="text-xs text-amber-700 md:col-span-2">
+                              Peringatan: No pesanan ini sudah ada ({editRecapDuplicateOrderNoRows.length} data).
+                            </p>
+                          ) : null}
                           <label className="grid gap-1 text-xs text-slate-600">
                             <span>Pelanggan</span>
                             <input value={editRecapDraft.pelanggan} onChange={(e) => updateEditRecapField("pelanggan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
@@ -7616,6 +7983,11 @@ export default function Page() {
                                     <span>No Pesanan</span>
                                     <input value={editRecapDraft.noPesanan} onChange={(e) => updateEditRecapField("noPesanan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                                   </label>
+                                  {editRecapDuplicateOrderNoRows.length ? (
+                                    <p className="text-xs text-amber-700 md:col-span-2 lg:col-span-3">
+                                      Peringatan: No pesanan ini sudah ada ({editRecapDuplicateOrderNoRows.length} data).
+                                    </p>
+                                  ) : null}
                                   <label className="grid gap-1 text-xs text-slate-600">
                                     <span>Pelanggan</span>
                                     <input value={editRecapDraft.pelanggan} onChange={(e) => updateEditRecapField("pelanggan", e.target.value)} className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />

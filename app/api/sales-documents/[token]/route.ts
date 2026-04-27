@@ -21,7 +21,8 @@ function isMissingTaxColumnError(message: string) {
       text.includes("tax_enabled") ||
       text.includes("tax_rate") ||
       text.includes("tax_amount") ||
-      text.includes("tax_mode")
+      text.includes("tax_mode") ||
+      text.includes("discount_amount")
     )
   );
 }
@@ -38,20 +39,42 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
     let { data, error } = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
     if (error && isMissingTaxColumnError(error.message || "")) {
+      const retryNoDiscount = await supabaseAdmin
+        .from("sales_documents")
+        .select(
+          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+        )
+        .eq("public_token", publicToken)
+        .maybeSingle();
+      data = retryNoDiscount.data as typeof data;
+      error = retryNoDiscount.error;
+    }
+    if (error && isMissingTaxColumnError(error.message || "")) {
       const retryNoMode = await supabaseAdmin
+        .from("sales_documents")
+        .select(
+          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+        )
+        .eq("public_token", publicToken)
+        .maybeSingle();
+      data = retryNoMode.data as typeof data;
+      error = retryNoMode.error;
+    }
+    if (error && isMissingTaxColumnError(error.message || "")) {
+      const retryNoModeNoDiscount = await supabaseAdmin
         .from("sales_documents")
         .select(
           "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
-      data = retryNoMode.data as typeof data;
-      error = retryNoMode.error;
+      data = retryNoModeNoDiscount.data as typeof data;
+      error = retryNoModeNoDiscount.error;
     }
     if (error && isMissingTaxColumnError(error.message || "")) {
       const legacyResultNoTax = await supabaseAdmin
@@ -72,29 +95,45 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
       return NextResponse.json({ ok: false, error: "Dokumen tidak ditemukan." }, { status: 404 });
     }
 
-    const subtotal = Number(data.subtotal) || 0;
+    const subtotal = Math.max(0, Number(data.subtotal) || 0);
     const taxRate = Math.max(0, Number(data.tax_rate) || 11);
     const taxAmountRaw = Math.max(0, Number(data.tax_amount) || 0);
     const grandTotalRaw = Math.max(0, Number(data.grand_total) || subtotal);
-    const inferredTaxEnabled = Boolean(data.tax_enabled) || taxAmountRaw > 0 || grandTotalRaw > subtotal + 1;
     const rawTaxMode = String(data.tax_mode || "").toLowerCase();
-    const inferredTaxMode =
+    const inferredTaxEnabledBase = Boolean(data.tax_enabled) || taxAmountRaw > 0 || grandTotalRaw > subtotal + 1;
+    const inferredTaxModeBase =
       rawTaxMode === "include" || rawTaxMode === "exclude"
         ? rawTaxMode
-        : inferredTaxEnabled && Math.abs(grandTotalRaw - subtotal) <= 1 && taxAmountRaw > 0
+        : inferredTaxEnabledBase && Math.abs(grandTotalRaw - subtotal) <= 1 && taxAmountRaw > 0
           ? "include"
           : "exclude";
+    const discountAmountFromColumn = Math.min(subtotal, Math.max(0, Number(data.discount_amount) || 0));
+    const inferredDiscountFromTotals = Math.max(
+      0,
+      inferredTaxEnabledBase
+        ? inferredTaxModeBase === "exclude"
+          ? subtotal + taxAmountRaw - grandTotalRaw
+          : subtotal - grandTotalRaw
+        : subtotal - grandTotalRaw
+    );
+    const discountAmount = Math.min(
+      subtotal,
+      discountAmountFromColumn > 0 ? discountAmountFromColumn : inferredDiscountFromTotals
+    );
+    const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount);
+    const inferredTaxEnabled = inferredTaxEnabledBase;
+    const inferredTaxMode = inferredTaxModeBase;
     const inferredTaxAmount =
       inferredTaxEnabled
         ? inferredTaxMode === "include"
-          ? Math.max(0, taxAmountRaw || subtotal - Math.round((subtotal * 100) / (100 + taxRate)))
-          : Math.max(0, taxAmountRaw || grandTotalRaw - subtotal || Math.round((subtotal * taxRate) / 100))
+          ? Math.max(0, taxAmountRaw || subtotalAfterDiscount - Math.round((subtotalAfterDiscount * 100) / (100 + taxRate)))
+          : Math.max(0, taxAmountRaw || grandTotalRaw - subtotalAfterDiscount || Math.round((subtotalAfterDiscount * taxRate) / 100))
         : 0;
     const inferredGrandTotal = inferredTaxEnabled
       ? inferredTaxMode === "include"
-        ? Math.max(0, grandTotalRaw || subtotal)
-        : Math.max(0, grandTotalRaw || subtotal + inferredTaxAmount)
-      : subtotal;
+        ? Math.max(0, grandTotalRaw || subtotalAfterDiscount)
+        : Math.max(0, grandTotalRaw || subtotalAfterDiscount + inferredTaxAmount)
+      : subtotalAfterDiscount;
 
     return NextResponse.json({
       ok: true,
@@ -113,6 +152,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         notes: data.notes,
         items: Array.isArray(data.items) ? data.items : [],
         subtotal,
+        discountAmount,
         taxEnabled: inferredTaxEnabled,
         taxMode: inferredTaxMode,
         taxRate,

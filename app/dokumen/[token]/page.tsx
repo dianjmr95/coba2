@@ -23,6 +23,7 @@ type DocumentRow = {
   notes: string;
   items: unknown;
   subtotal: number | string;
+  discount_amount?: number | string;
   tax_enabled?: boolean;
   tax_mode?: string;
   tax_rate?: number | string;
@@ -69,7 +70,8 @@ function isMissingTaxColumnError(message: string) {
       text.includes("tax_enabled") ||
       text.includes("tax_rate") ||
       text.includes("tax_amount") ||
-      text.includes("tax_mode")
+      text.includes("tax_mode") ||
+      text.includes("discount_amount")
     )
   );
 }
@@ -89,6 +91,7 @@ export default async function DokumenPage({
     includeTaxMode?: string;
     includeTaxAmount?: string;
     includeTaxRate?: string;
+    includeDiscountAmount?: string;
     includeSJ?: string;
   }>;
 }) {
@@ -108,6 +111,9 @@ export default async function DokumenPage({
   const includeTaxAmountParamRaw = String(query?.includeTaxAmount || "").trim();
   const includeTaxAmountParsed = Number(includeTaxAmountParamRaw);
   const hasTaxAmountOverride = Number.isFinite(includeTaxAmountParsed) && includeTaxAmountParsed >= 0;
+  const includeDiscountAmountParamRaw = String(query?.includeDiscountAmount || "").trim();
+  const includeDiscountAmountParsed = Number(includeDiscountAmountParamRaw);
+  const hasDiscountAmountOverride = Number.isFinite(includeDiscountAmountParsed) && includeDiscountAmountParsed >= 0;
   const includeTaxRateParamRaw = String(query?.includeTaxRate || "").trim();
   const includeTaxRateParsed = Number(includeTaxRateParamRaw);
   const hasTaxRateOverride = Number.isFinite(includeTaxRateParsed) && includeTaxRateParsed > 0;
@@ -130,10 +136,28 @@ export default async function DokumenPage({
     let result = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total"
+        "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
+    if (result.error && isMissingTaxColumnError(result.error.message || "")) {
+      result = await supabaseAdmin
+        .from("sales_documents")
+        .select(
+          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total"
+        )
+        .eq("public_token", publicToken)
+        .maybeSingle();
+    }
+    if (result.error && isMissingTaxColumnError(result.error.message || "")) {
+      result = await supabaseAdmin
+        .from("sales_documents")
+        .select(
+          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_rate, tax_amount, grand_total"
+        )
+        .eq("public_token", publicToken)
+        .maybeSingle();
+    }
     if (result.error && isMissingTaxColumnError(result.error.message || "")) {
       result = await supabaseAdmin
         .from("sales_documents")
@@ -190,41 +214,67 @@ export default async function DokumenPage({
   const docTitle = isPenawaran ? "SURAT PENAWARAN BARANG" : "FAKTUR PENJUALAN";
   const docNoLabel = isPenawaran ? "No Penawaran" : "No Faktur";
   const totalLabel = isPenawaran ? "TOTAL PENAWARAN" : "TOTAL";
-  const subtotal = Number(data.subtotal) || items.reduce((acc, item) => acc + item.qty * item.harga, 0);
+  const subtotal = Math.max(0, Number(data.subtotal) || items.reduce((acc, item) => acc + item.qty * item.harga, 0));
   const taxRate = hasTaxRateOverride ? includeTaxRateParsed : Math.max(0, Number(data.tax_rate) || 11);
-  const grandTotalRaw = Math.max(0, Number(data.grand_total) || 0);
+  const grandTotalRaw = Math.max(0, Number(data.grand_total) || subtotal);
   const taxAmountRaw = Math.max(0, Number(data.tax_amount) || 0);
   const inferredTaxFromTotals = taxAmountRaw > 0 || grandTotalRaw > subtotal + 1;
   const taxEnabledFromData = Boolean(data.tax_enabled) || inferredTaxFromTotals;
   const taxEnabled = hasTaxOverride ? includeTaxOverride : taxEnabledFromData;
   const taxModeFromData = String(data.tax_mode || "").toLowerCase();
-  const inferredTaxMode =
+  const inferredTaxModeBase =
     taxModeFromData === "include" || taxModeFromData === "exclude"
       ? taxModeFromData
       : taxEnabledFromData && Math.abs(grandTotalRaw - subtotal) <= 1 && (taxAmountRaw > 0 || inferredTaxFromTotals)
         ? "include"
         : "exclude";
-  const taxMode = hasTaxModeOverride ? includeTaxModeOverride : inferredTaxMode;
-  const dppSubtotal = taxEnabled && taxMode === "include" ? Math.round((subtotal * 100) / (100 + taxRate)) : subtotal;
+  const discountAmountFromData = Math.min(subtotal, Math.max(0, Number(data.discount_amount) || 0));
+  const inferredDiscountFromTotals = Math.max(
+    0,
+    taxEnabledFromData
+      ? inferredTaxModeBase === "exclude"
+        ? subtotal + taxAmountRaw - grandTotalRaw
+        : subtotal - grandTotalRaw
+      : subtotal - grandTotalRaw
+  );
+  const discountAmount = Math.min(
+    subtotal,
+    hasDiscountAmountOverride
+      ? Math.max(0, includeDiscountAmountParsed)
+      : discountAmountFromData > 0
+        ? discountAmountFromData
+        : inferredDiscountFromTotals
+  );
+  const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount);
+  const taxMode = hasTaxModeOverride ? includeTaxModeOverride : inferredTaxModeBase;
+  const dppSubtotal =
+    taxEnabled && taxMode === "include"
+      ? Math.round((subtotalAfterDiscount * 100) / (100 + taxRate))
+      : subtotalAfterDiscount;
   const computedTaxAmount = taxEnabled
     ? taxMode === "include"
-      ? Math.max(0, taxAmountRaw || subtotal - dppSubtotal)
-      : Math.max(0, taxAmountRaw || grandTotalRaw - subtotal || Math.round((subtotal * taxRate) / 100))
+      ? Math.max(0, taxAmountRaw || subtotalAfterDiscount - dppSubtotal)
+      : Math.max(
+          0,
+          taxAmountRaw ||
+            grandTotalRaw - subtotalAfterDiscount ||
+            Math.round((subtotalAfterDiscount * taxRate) / 100)
+        )
     : 0;
   const taxAmount = taxEnabled ? (hasTaxAmountOverride ? Math.max(0, includeTaxAmountParsed) : computedTaxAmount) : 0;
-  const displaySubtotal = taxEnabled && taxMode === "include" ? dppSubtotal : subtotal;
+  const displaySubtotal = taxEnabled && taxMode === "include" ? dppSubtotal : subtotalAfterDiscount;
   const subtotalLabel = taxEnabled && taxMode === "include" ? "Subtotal (DPP)" : "Subtotal";
   const total = hasTaxOverride
     ? taxEnabled
       ? taxMode === "include"
-        ? subtotal
-        : subtotal + taxAmount
-      : subtotal
+        ? subtotalAfterDiscount
+        : subtotalAfterDiscount + taxAmount
+      : subtotalAfterDiscount
     : taxEnabled
       ? taxMode === "include"
-        ? Math.max(0, grandTotalRaw || subtotal)
-        : Math.max(0, grandTotalRaw || subtotal + taxAmount)
-      : subtotal;
+        ? Math.max(0, grandTotalRaw || subtotalAfterDiscount)
+        : Math.max(0, grandTotalRaw || subtotalAfterDiscount + taxAmount)
+      : subtotalAfterDiscount;
   const taxTermsLine =
     taxMode === "include"
       ? "Harga diatas sudah termasuk Faktur Pajak."
@@ -358,6 +408,18 @@ export default async function DokumenPage({
 
         {taxEnabled ? (
           <div className="mt-2 grid gap-1 text-xs text-slate-700">
+            {discountAmount > 0 ? (
+              <>
+                <div className="flex justify-end gap-2">
+                  <span>Subtotal Barang</span>
+                  <strong>{rupiah(subtotal)}</strong>
+                </div>
+                <div className="flex justify-end gap-2">
+                  <span>Diskon</span>
+                  <strong>-{rupiah(discountAmount)}</strong>
+                </div>
+              </>
+            ) : null}
             <div className="flex justify-end gap-2">
               <span>{subtotalLabel}</span>
               <strong>{rupiah(displaySubtotal)}</strong>
@@ -365,6 +427,21 @@ export default async function DokumenPage({
             <div className="flex justify-end gap-2">
               <span>PPN ({taxRate.toFixed(2).replace(".", ",")}%)</span>
               <strong>{rupiah(taxAmount)}</strong>
+            </div>
+          </div>
+        ) : discountAmount > 0 ? (
+          <div className="mt-2 grid gap-1 text-xs text-slate-700">
+            <div className="flex justify-end gap-2">
+              <span>Subtotal Barang</span>
+              <strong>{rupiah(subtotal)}</strong>
+            </div>
+            <div className="flex justify-end gap-2">
+              <span>Diskon</span>
+              <strong>-{rupiah(discountAmount)}</strong>
+            </div>
+            <div className="flex justify-end gap-2">
+              <span>Subtotal</span>
+              <strong>{rupiah(subtotalAfterDiscount)}</strong>
             </div>
           </div>
         ) : null}

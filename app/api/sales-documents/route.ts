@@ -24,6 +24,7 @@ type SalesDocumentRequest = {
   notes?: string;
   items?: SalesDocumentItem[];
   subtotal?: number;
+  discountAmount?: number;
   taxEnabled?: boolean;
   taxMode?: "exclude" | "include";
   taxRate?: number;
@@ -81,7 +82,8 @@ function isMissingTaxColumnError(message: string) {
       text.includes("tax_enabled") ||
       text.includes("tax_rate") ||
       text.includes("tax_amount") ||
-      text.includes("tax_mode")
+      text.includes("tax_mode") ||
+      text.includes("discount_amount")
     )
   );
 }
@@ -96,13 +98,15 @@ export async function POST(request: NextRequest) {
     const validUntil = normalizeIsoDate(body.validUntil || null);
     const items = normalizeItems(body.items);
     const subtotal = Math.max(0, Math.round(Number(body.subtotal) || 0));
+    const discountAmount = Math.min(subtotal, Math.max(0, Math.round(Number(body.discountAmount) || 0)));
+    const discountedSubtotal = Math.max(0, subtotal - discountAmount);
     const taxEnabled = Boolean(body.taxEnabled);
     const taxMode = body.taxMode === "include" ? "include" : "exclude";
     const taxRate = Math.max(0, Number(body.taxRate) || 11);
     const taxAmount = taxEnabled ? Math.max(0, Math.round(Number(body.taxAmount) || 0)) : 0;
     const grandTotal = Math.max(
       0,
-      Math.round(Number(body.grandTotal) || subtotal + taxAmount)
+      Math.round(Number(body.grandTotal) || discountedSubtotal + taxAmount)
     );
     const markPrinted = Boolean(body.markPrinted);
 
@@ -153,6 +157,24 @@ export async function POST(request: NextRequest) {
       notes: String(body.notes || "").trim(),
       items,
       subtotal,
+      discount_amount: discountAmount,
+      last_printed_at: markPrinted ? new Date().toISOString() : null
+    };
+    const payloadBaseLegacyNoDiscount = {
+      public_token: publicToken,
+      document_no: documentNo,
+      document_type: documentType,
+      invoice_date: invoiceDate,
+      valid_until: documentType === "penawaran" ? validUntil : null,
+      buyer: String(body.buyer || "").trim(),
+      phone: String(body.phone || "").trim(),
+      whatsapp: String(body.whatsapp || "").trim(),
+      address: String(body.address || "").trim(),
+      courier: String(body.courier || "").trim(),
+      sales_pic: documentType === "penawaran" ? String(body.salesPic || "").trim() : "",
+      notes: String(body.notes || "").trim(),
+      items,
+      subtotal,
       last_printed_at: markPrinted ? new Date().toISOString() : null
     };
     const payloadWithTax = {
@@ -165,6 +187,21 @@ export async function POST(request: NextRequest) {
     };
     const payloadWithTaxNoMode = {
       ...payloadBase,
+      tax_enabled: taxEnabled,
+      tax_rate: taxRate,
+      tax_amount: taxAmount,
+      grand_total: grandTotal
+    };
+    const payloadWithTaxLegacyNoDiscount = {
+      ...payloadBaseLegacyNoDiscount,
+      tax_enabled: taxEnabled,
+      tax_mode: taxMode,
+      tax_rate: taxRate,
+      tax_amount: taxAmount,
+      grand_total: grandTotal
+    };
+    const payloadWithTaxNoModeLegacyNoDiscount = {
+      ...payloadBaseLegacyNoDiscount,
       tax_enabled: taxEnabled,
       tax_rate: taxRate,
       tax_amount: taxAmount,
@@ -191,10 +228,30 @@ export async function POST(request: NextRequest) {
         updateError = retryNoMode.error;
       }
       if (updateError && isMissingTaxColumnError(updateError.message || "")) {
+        const legacyRetryNoDiscount = await supabaseAdmin
+          .from("sales_documents")
+          .update({
+            ...payloadWithTaxLegacyNoDiscount,
+            print_count: nextPrintCount
+          })
+          .eq("id", existing.id);
+        updateError = legacyRetryNoDiscount.error;
+      }
+      if (updateError && isMissingTaxColumnError(updateError.message || "")) {
+        const legacyRetryNoModeNoDiscount = await supabaseAdmin
+          .from("sales_documents")
+          .update({
+            ...payloadWithTaxNoModeLegacyNoDiscount,
+            print_count: nextPrintCount
+          })
+          .eq("id", existing.id);
+        updateError = legacyRetryNoModeNoDiscount.error;
+      }
+      if (updateError && isMissingTaxColumnError(updateError.message || "")) {
         const legacyRetryNoTax = await supabaseAdmin
           .from("sales_documents")
           .update({
-            ...payloadBase,
+            ...payloadBaseLegacyNoDiscount,
             print_count: nextPrintCount
           })
           .eq("id", existing.id);
@@ -218,8 +275,24 @@ export async function POST(request: NextRequest) {
         insertError = retryNoMode.error;
       }
       if (insertError && isMissingTaxColumnError(insertError.message || "")) {
+        const legacyRetryNoDiscount = await supabaseAdmin.from("sales_documents").insert({
+          ...payloadWithTaxLegacyNoDiscount,
+          print_count: markPrinted ? 1 : 0,
+          created_by: authUserId
+        });
+        insertError = legacyRetryNoDiscount.error;
+      }
+      if (insertError && isMissingTaxColumnError(insertError.message || "")) {
+        const legacyRetryNoModeNoDiscount = await supabaseAdmin.from("sales_documents").insert({
+          ...payloadWithTaxNoModeLegacyNoDiscount,
+          print_count: markPrinted ? 1 : 0,
+          created_by: authUserId
+        });
+        insertError = legacyRetryNoModeNoDiscount.error;
+      }
+      if (insertError && isMissingTaxColumnError(insertError.message || "")) {
         const legacyRetryNoTax = await supabaseAdmin.from("sales_documents").insert({
-          ...payloadBase,
+          ...payloadBaseLegacyNoDiscount,
           print_count: markPrinted ? 1 : 0,
           created_by: authUserId
         });
