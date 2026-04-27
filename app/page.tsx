@@ -2057,6 +2057,22 @@ export default function Page() {
     () => Math.max(0, invoiceGrandTotal - invoiceDownPaymentAmount),
     [invoiceDownPaymentAmount, invoiceGrandTotal]
   );
+  const invoiceHasCoreInfo = useMemo(() => {
+    const hasDate = Boolean(String(invoiceDate || "").trim());
+    const hasBuyer = Boolean(String(invoiceBuyer || "").trim());
+    const hasContact = Boolean(String(invoicePhone || "").trim() || String(invoiceWhatsapp || "").trim());
+    return hasDate && hasBuyer && hasContact;
+  }, [invoiceBuyer, invoiceDate, invoicePhone, invoiceWhatsapp]);
+  const invoiceHasItems = useMemo(
+    () => invoiceItems.some((item) => item.nama.trim() && item.qty > 0 && item.harga >= 0),
+    [invoiceItems]
+  );
+  const invoiceCanFinalize = useMemo(() => invoiceHasCoreInfo && invoiceHasItems && invoiceGrandTotal > 0, [invoiceGrandTotal, invoiceHasCoreInfo, invoiceHasItems]);
+  const invoiceStepDoneCount = useMemo(
+    () => [invoiceHasCoreInfo, invoiceHasItems, invoiceCanFinalize].filter(Boolean).length,
+    [invoiceCanFinalize, invoiceHasCoreInfo, invoiceHasItems]
+  );
+  const invoiceStepProgressPct = useMemo(() => Math.round((invoiceStepDoneCount / 3) * 100), [invoiceStepDoneCount]);
 
   useEffect(() => {
     setInvoiceDiscountAmount((prev) => Math.min(Math.max(0, Number(prev) || 0), Math.max(0, Math.round(invoiceSubtotal))));
@@ -2188,8 +2204,15 @@ export default function Page() {
 
   async function printInvoice() {
     let savedDoc: { documentNo: string; publicToken: string; shareUrl: string };
+    const hasExistingIdentity = Boolean(invoiceNo.trim() && invoicePublicToken.trim());
+    const isExistingIdentityTypeMatch =
+      resolveInvoiceDocType(invoiceDocType, invoiceNo) === invoiceDocType;
+    const shouldCreateNewDocument = !(hasExistingIdentity && isExistingIdentityTypeMatch);
     try {
-      savedDoc = await saveInvoiceDocument({ forceNewNumber: true, markPrinted: true });
+      savedDoc = await saveInvoiceDocument({
+        forceNewNumber: shouldCreateNewDocument,
+        markPrinted: true
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Gagal menyimpan dokumen.";
       setInvoiceSaveNotice(message);
@@ -6428,29 +6451,93 @@ export default function Page() {
 
       {activeSection === "pembuatan-nota" ? (
       <section id="pembuatan-nota" className="animate-sweep-in">
-        <article className="card-shell p-5">
-          <div className="mb-3">
-            <h2 className="text-base font-bold">Jendela Nota / Faktur / Penawaran Barang</h2>
+        <article className="card-shell overflow-hidden border border-stone-200 bg-gradient-to-br from-amber-50/60 via-white to-cyan-50/40 p-5">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h2 className="text-lg font-bold text-slate-900">Pembuatan Faktur & Penawaran</h2>
+              <p className="text-sm text-slate-600">Isi data inti, tambahkan item, lalu cetak atau bagikan dokumen dalam satu alur.</p>
+            </div>
+            <span className="rounded-full border border-amber-200 bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-700">Form Cepat</span>
+          </div>
+
+          <div className="mb-4 grid gap-3 rounded-2xl border border-cyan-200/70 bg-white/80 p-3 md:grid-cols-2">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Jenis Dokumen</p>
+              <p className="mt-1 text-xs text-slate-500">Pilih sesuai kebutuhan transaksi sebelum mengisi detail.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setInvoiceDocType("faktur");
+                  setInvoiceNo("");
+                  setInvoicePublicToken("");
+                }}
+                className={
+                  invoiceDocType === "faktur"
+                    ? "rounded-xl border border-emerald-300 bg-emerald-100 px-3 py-2 text-sm font-semibold text-emerald-700"
+                    : "rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                }
+              >
+                Faktur
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setInvoiceDocType("penawaran");
+                  setInvoiceNo("");
+                  setInvoicePublicToken("");
+                }}
+                className={
+                  invoiceDocType === "penawaran"
+                    ? "rounded-xl border border-sky-300 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-700"
+                    : "rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                }
+              >
+                Penawaran
+              </button>
+            </div>
+          </div>
+
+          <div className="mb-4 rounded-2xl border border-stone-200 bg-white/90 p-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-slate-800">Progress Pembuatan Dokumen</p>
+              <p className="text-xs font-medium text-slate-600">{invoiceStepDoneCount}/3 langkah selesai ({invoiceStepProgressPct}%)</p>
+            </div>
+            <div className="mb-3 h-2 overflow-hidden rounded-full bg-stone-200">
+              <div className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-sky-500 transition-all duration-500" style={{ width: `${invoiceStepProgressPct}%` }} />
+            </div>
+            <div className="grid gap-2 md:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => document.getElementById("invoice-step-1")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                className={invoiceHasCoreInfo ? "rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-left" : "rounded-xl border border-stone-200 bg-white px-3 py-2 text-left"}
+              >
+                <p className={invoiceHasCoreInfo ? "text-xs font-semibold text-emerald-700" : "text-xs font-semibold text-slate-600"}>Langkah 1</p>
+                <p className="text-sm font-medium text-slate-800">Info Dokumen</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => document.getElementById("invoice-step-2")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                className={invoiceHasItems ? "rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-left" : "rounded-xl border border-stone-200 bg-white px-3 py-2 text-left"}
+              >
+                <p className={invoiceHasItems ? "text-xs font-semibold text-emerald-700" : "text-xs font-semibold text-slate-600"}>Langkah 2</p>
+                <p className="text-sm font-medium text-slate-800">Item & Harga</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => document.getElementById("invoice-step-3")?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                className={invoiceCanFinalize ? "rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-left" : "rounded-xl border border-stone-200 bg-white px-3 py-2 text-left"}
+              >
+                <p className={invoiceCanFinalize ? "text-xs font-semibold text-emerald-700" : "text-xs font-semibold text-slate-600"}>Langkah 3</p>
+                <p className="text-sm font-medium text-slate-800">Finalisasi</p>
+              </button>
+            </div>
           </div>
 
           <div className="grid gap-4">
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="grid gap-1.5 text-sm text-slate-600">
-                  <span>Jenis Dokumen</span>
-                  <select
-                    value={invoiceDocType}
-                    onChange={(e) => {
-                      setInvoiceDocType(e.target.value as InvoiceDocumentType);
-                      setInvoiceNo("");
-                      setInvoicePublicToken("");
-                    }}
-                    className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
-                  >
-                    <option value="faktur">Faktur Penjualan</option>
-                    <option value="penawaran">Penawaran Barang</option>
-                  </select>
-                </label>
-                <label className="grid gap-1.5 text-sm text-slate-600">
+              <div id="invoice-step-1" className="grid gap-3 rounded-2xl border border-sky-200/80 bg-gradient-to-br from-sky-50/50 via-white to-amber-50/40 p-3 md:grid-cols-2">
+                <label className="grid gap-1.5 rounded-xl border border-sky-200 bg-sky-50/60 p-2.5 text-sm text-slate-600">
                   <span>No {invoiceDocLabel} (otomatis saat cetak)</span>
                   <input
                     value={invoiceNo}
@@ -6459,12 +6546,12 @@ export default function Page() {
                     className="w-full rounded-2xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-slate-800 outline-none"
                   />
                 </label>
-                <label className="grid gap-1.5 text-sm text-slate-600">
+                <label className="grid gap-1.5 rounded-xl border border-sky-200 bg-sky-50/60 p-2.5 text-sm text-slate-600">
                   <span>Tanggal</span>
                   <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                 </label>
                 {invoiceDocType === "penawaran" ? (
-                  <label className="grid gap-1.5 text-sm text-slate-600">
+                  <label className="grid gap-1.5 rounded-xl border border-sky-200 bg-sky-50/60 p-2.5 text-sm text-slate-600">
                     <span>Masa Berlaku Penawaran</span>
                     <input
                       type="date"
@@ -6474,12 +6561,12 @@ export default function Page() {
                     />
                   </label>
                 ) : null}
-                <label className="grid gap-1.5 text-sm text-slate-600">
+                <label className="grid gap-1.5 rounded-xl border border-amber-200 bg-amber-50/60 p-2.5 text-sm text-slate-600">
                   <span>Nama Pembeli</span>
                   <input value={invoiceBuyer} onChange={(e) => setInvoiceBuyer(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                 </label>
                 {invoiceDocType === "penawaran" ? (
-                  <label className="grid gap-1.5 text-sm text-slate-600">
+                  <label className="grid gap-1.5 rounded-xl border border-amber-200 bg-amber-50/60 p-2.5 text-sm text-slate-600">
                     <span>PIC Sales</span>
                     <input
                       value={invoiceSalesPic}
@@ -6489,46 +6576,56 @@ export default function Page() {
                     />
                   </label>
                 ) : null}
-                <label className="grid gap-1.5 text-sm text-slate-600">
+                <label className="grid gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-sm text-slate-600">
                   <span>No Telepon</span>
                   <input value={invoicePhone} onChange={(e) => setInvoicePhone(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                 </label>
-                <label className="grid gap-1.5 text-sm text-slate-600">
+                <label className="grid gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-sm text-slate-600">
                   <span>No WhatsApp Tujuan</span>
                   <input value={invoiceWhatsapp} onChange={(e) => setInvoiceWhatsapp(e.target.value)} placeholder="Contoh: 08123456789 / 628123456789" className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                 </label>
-                <label className="grid gap-1.5 text-sm text-slate-600">
+                <label className="grid gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-sm text-slate-600">
                   <span>Kurir Pengiriman</span>
                   <input value={invoiceCourier} onChange={(e) => setInvoiceCourier(e.target.value)} placeholder="Contoh: JNE REG" className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
                 </label>
               </div>
 
-              <label className="grid gap-1.5 text-sm text-slate-600">
+              <label className="grid gap-1.5 rounded-2xl border border-cyan-200 bg-cyan-50/60 p-3 text-sm text-slate-600">
                 <span>Alamat</span>
                 <textarea value={invoiceAddress} onChange={(e) => setInvoiceAddress(e.target.value)} rows={2} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
               </label>
 
-              <div className="rounded-2xl border border-stone-200 bg-stone-50/80 p-3">
+              <div id="invoice-step-2" className="rounded-2xl border border-emerald-200/70 bg-gradient-to-br from-white to-emerald-50/50 p-3">
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-semibold text-slate-700">{invoiceDocType === "faktur" ? "Item Penjualan" : "Item Penawaran"}</p>
-                  <button type="button" onClick={addInvoiceItem} className="rounded-xl border border-stone-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-stone-100">Tambah Item</button>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">{invoiceDocType === "faktur" ? "Item Penjualan" : "Item Penawaran"}</p>
+                    <p className="text-xs text-slate-500">Masukkan nama barang, qty, dan harga satuan untuk hitung total otomatis.</p>
+                  </div>
+                  <button type="button" onClick={addInvoiceItem} className="rounded-xl border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100">Tambah Item</button>
+                </div>
+                <div className="mb-2 hidden grid-cols-[1.6fr_90px_130px_130px_auto] gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+                  <span>Nama Barang</span>
+                  <span className="text-right">Qty</span>
+                  <span className="text-right">Harga</span>
+                  <span className="text-right">Total</span>
+                  <span className="text-center">Aksi</span>
                 </div>
                 <div className="grid gap-2">
                   {invoiceItems.map((item) => {
                     const lineTotal = Math.max(0, item.qty) * Math.max(0, item.harga);
                     return (
-                      <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 lg:grid-cols-[1.6fr_90px_130px_130px_auto]">
-                        <input placeholder="Nama barang" value={item.nama} onChange={(e) => updateInvoiceItem(item.id, "nama", e.target.value)} className="rounded-xl border border-stone-200 px-2 py-2 text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                        <input type="number" min={0} value={item.qty} onChange={(e) => updateInvoiceItem(item.id, "qty", Number(e.target.value || 0))} className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                        <input type="number" min={0} value={item.harga} onChange={(e) => updateInvoiceItem(item.id, "harga", Number(e.target.value || 0))} className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                        <div className="flex items-center justify-end rounded-xl border border-stone-200 bg-stone-50 px-2 py-2 text-sm font-medium text-slate-700">{rupiah(lineTotal)}</div>
+                      <div key={item.id} className="grid gap-2 rounded-xl border border-stone-200 bg-white p-2 shadow-sm lg:grid-cols-[1.6fr_90px_130px_130px_auto]">
+                        <input placeholder="Nama barang" value={item.nama} onChange={(e) => updateInvoiceItem(item.id, "nama", e.target.value)} className="rounded-xl border border-stone-200 px-2 py-2 text-sm outline-none focus:border-emerald-300 focus:ring-2 focus:ring-emerald-100" />
+                        <input type="number" min={0} value={item.qty} onChange={(e) => updateInvoiceItem(item.id, "qty", Number(e.target.value || 0))} className="rounded-xl border border-sky-200 bg-sky-50/60 px-2 py-2 text-right text-sm outline-none focus:border-sky-300 focus:ring-2 focus:ring-sky-100" />
+                        <input type="number" min={0} value={item.harga} onChange={(e) => updateInvoiceItem(item.id, "harga", Number(e.target.value || 0))} className="rounded-xl border border-amber-200 bg-amber-50/60 px-2 py-2 text-right text-sm outline-none focus:border-amber-300 focus:ring-2 focus:ring-amber-100" />
+                        <div className="flex items-center justify-end rounded-xl border border-emerald-200 bg-emerald-50/70 px-2 py-2 text-sm font-semibold text-slate-700">{rupiah(lineTotal)}</div>
                         <button type="button" onClick={() => removeInvoiceItem(item.id)} className="rounded-xl border border-rose-200 bg-rose-50 px-2 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100">Hapus</button>
                       </div>
                     );
                   })}
                 </div>
                 <div className="mt-2 grid gap-1.5 text-sm text-slate-600 md:max-w-xs md:ml-auto">
-                  <label className="grid gap-1">
+                  <label className="grid gap-1 rounded-xl border border-amber-200 bg-amber-50/60 p-2">
                     <span>Diskon (Rp)</span>
                     <input
                       type="number"
@@ -6543,7 +6640,7 @@ export default function Page() {
                       className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
                     />
                   </label>
-                  <label className="grid gap-1">
+                  <label className="grid gap-1 rounded-xl border border-sky-200 bg-sky-50/60 p-2">
                     <span>DP Dibayar (%)</span>
                     <input
                       type="number"
@@ -6564,7 +6661,7 @@ export default function Page() {
                     ) : null}
                   </label>
                 </div>
-                <div className="mt-2 grid gap-1 text-sm text-slate-700">
+                <div className="mt-3 grid gap-1 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm text-slate-700">
                   {invoiceTaxEnabled ? (
                     <>
                       {invoiceDiscountValue > 0 ? (
@@ -6605,12 +6702,13 @@ export default function Page() {
                 </div>
               </div>
 
-              <label className="grid gap-1.5 text-sm text-slate-600">
+              <label className="grid gap-1.5 rounded-2xl border border-amber-200 bg-amber-50/50 p-3 text-sm text-slate-600">
                 <span>Catatan</span>
                 <textarea value={invoiceNotes} onChange={(e) => setInvoiceNotes(e.target.value)} rows={2} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
               </label>
 
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div id="invoice-step-3" className="grid gap-3 rounded-2xl border border-stone-200 bg-white/85 p-3">
+                <div className="flex flex-wrap items-center gap-2">
                 <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
                   <input
                     type="checkbox"
@@ -6662,7 +6760,8 @@ export default function Page() {
                     <span>Cetak dengan Surat Jalan</span>
                   </label>
                 ) : null}
-                <div className="flex flex-wrap items-center justify-end gap-2">
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2 border-t border-dashed border-stone-300 pt-3">
                   <button
                     type="button"
                     onClick={resetInvoiceWithConfirmation}
@@ -6690,7 +6789,7 @@ export default function Page() {
                     type="button"
                     onClick={printInvoice}
                     disabled={isInvoiceSaving || !canManageDocuments}
-                    className="rounded-2xl border border-stone-900 bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800"
+                    className="rounded-2xl border border-emerald-700 bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800"
                   >
                     {isInvoiceSaving
                       ? "Menyimpan..."
@@ -6711,10 +6810,10 @@ export default function Page() {
                 </div>
               </div>
               {invoiceSaveNotice ? (
-                <p className="text-xs text-slate-600">{invoiceSaveNotice}</p>
+                <p className="rounded-xl border border-stone-200 bg-white/85 px-3 py-2 text-xs text-slate-600">{invoiceSaveNotice}</p>
               ) : null}
               {invoicePublicToken ? (
-                <p className="text-xs text-slate-600">
+                <p className="rounded-xl border border-sky-200 bg-sky-50/70 px-3 py-2 text-xs text-slate-700">
                   Link dokumen:{" "}
                   <a
                     href={`/dokumen/${invoicePublicToken}`}
