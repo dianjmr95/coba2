@@ -23,7 +23,8 @@ function isMissingTaxColumnError(message: string) {
       text.includes("tax_rate") ||
       text.includes("tax_amount") ||
       text.includes("tax_mode") ||
-      text.includes("discount_amount")
+      text.includes("discount_amount") ||
+      text.includes("down_payment_percent")
     )
   );
 }
@@ -36,6 +37,7 @@ type SalesDocumentItem = {
 
 type LegacyDocumentMeta = {
   discountAmount?: number;
+  downPaymentPercent?: number;
   taxEnabled?: boolean;
   taxMode?: "exclude" | "include";
   taxRate?: number;
@@ -110,7 +112,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
     let { data, error } = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+        "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, down_payment_percent, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
@@ -118,7 +120,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
       const retryNoDiscount = await supabaseAdmin
         .from("sales_documents")
         .select(
-          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, down_payment_percent, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
@@ -129,7 +131,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
       const retryNoMode = await supabaseAdmin
         .from("sales_documents")
         .select(
-          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, down_payment_percent, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
@@ -140,7 +142,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
       const retryNoModeNoDiscount = await supabaseAdmin
         .from("sales_documents")
         .select(
-          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
+          "public_token, document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, down_payment_percent, tax_enabled, tax_rate, tax_amount, grand_total, print_count, last_printed_at, created_at"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
@@ -210,6 +212,10 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
       subtotal,
       discountAmountFromColumn > 0 ? discountAmountFromColumn : inferredDiscountFromTotals
     );
+    const downPaymentPercent = Math.min(
+      100,
+      Math.max(0, Number(data.down_payment_percent) || Math.max(0, Number(legacyMeta?.downPaymentPercent) || 0))
+    );
     const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount);
     const inferredTaxEnabled = inferredTaxEnabledBase;
     const inferredTaxMode = inferredTaxModeBase;
@@ -243,6 +249,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         items: normalizedItems,
         subtotal,
         discountAmount,
+        downPaymentPercent,
         taxEnabled: inferredTaxEnabled,
         taxMode: inferredTaxMode,
         taxRate,

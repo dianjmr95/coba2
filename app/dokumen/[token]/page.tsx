@@ -24,6 +24,7 @@ type DocumentRow = {
   items: unknown;
   subtotal: number | string;
   discount_amount?: number | string;
+  down_payment_percent?: number | string;
   tax_enabled?: boolean;
   tax_mode?: string;
   tax_rate?: number | string;
@@ -33,6 +34,7 @@ type DocumentRow = {
 
 type LegacyDocumentMeta = {
   discountAmount?: number;
+  downPaymentPercent?: number;
   taxEnabled?: boolean;
   taxMode?: "exclude" | "include";
   taxRate?: number;
@@ -45,6 +47,11 @@ const LEGACY_META_SUFFIX = "]]";
 
 function rupiah(num: number) {
   return `Rp ${Math.round(num || 0).toLocaleString("id-ID")}`;
+}
+
+function formatPercent(num: number) {
+  const normalized = Math.min(100, Math.max(0, Number(num) || 0));
+  return normalized.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
 function formatDate(value: string | null | undefined) {
@@ -101,7 +108,8 @@ function isMissingTaxColumnError(message: string) {
       text.includes("tax_rate") ||
       text.includes("tax_amount") ||
       text.includes("tax_mode") ||
-      text.includes("discount_amount")
+      text.includes("discount_amount") ||
+      text.includes("down_payment_percent")
     )
   );
 }
@@ -122,6 +130,7 @@ export default async function DokumenPage({
     includeTaxAmount?: string;
     includeTaxRate?: string;
     includeDiscountAmount?: string;
+    includeDpPercent?: string;
     includeSJ?: string;
   }>;
 }) {
@@ -144,6 +153,9 @@ export default async function DokumenPage({
   const includeDiscountAmountParamRaw = String(query?.includeDiscountAmount || "").trim();
   const includeDiscountAmountParsed = Number(includeDiscountAmountParamRaw);
   const hasDiscountAmountOverride = Number.isFinite(includeDiscountAmountParsed) && includeDiscountAmountParsed >= 0;
+  const includeDpPercentParamRaw = String(query?.includeDpPercent || "").trim();
+  const includeDpPercentParsed = Number(includeDpPercentParamRaw);
+  const hasDpPercentOverride = Number.isFinite(includeDpPercentParsed) && includeDpPercentParsed >= 0;
   const includeTaxRateParamRaw = String(query?.includeTaxRate || "").trim();
   const includeTaxRateParsed = Number(includeTaxRateParamRaw);
   const hasTaxRateOverride = Number.isFinite(includeTaxRateParsed) && includeTaxRateParsed > 0;
@@ -166,7 +178,7 @@ export default async function DokumenPage({
     let result = await supabaseAdmin
       .from("sales_documents")
       .select(
-        "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total"
+        "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, down_payment_percent, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total"
       )
       .eq("public_token", publicToken)
       .maybeSingle();
@@ -174,7 +186,7 @@ export default async function DokumenPage({
       result = await supabaseAdmin
         .from("sales_documents")
         .select(
-          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total"
+          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, down_payment_percent, tax_enabled, tax_mode, tax_rate, tax_amount, grand_total"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
@@ -183,7 +195,7 @@ export default async function DokumenPage({
       result = await supabaseAdmin
         .from("sales_documents")
         .select(
-          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, tax_enabled, tax_rate, tax_amount, grand_total"
+          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, discount_amount, down_payment_percent, tax_enabled, tax_rate, tax_amount, grand_total"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
@@ -192,7 +204,7 @@ export default async function DokumenPage({
       result = await supabaseAdmin
         .from("sales_documents")
         .select(
-          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, tax_enabled, tax_rate, tax_amount, grand_total"
+          "document_no, document_type, invoice_date, valid_until, buyer, phone, whatsapp, address, courier, sales_pic, notes, items, subtotal, down_payment_percent, tax_enabled, tax_rate, tax_amount, grand_total"
         )
         .eq("public_token", publicToken)
         .maybeSingle();
@@ -317,6 +329,14 @@ export default async function DokumenPage({
         ? Math.max(0, grandTotalRaw || subtotalAfterDiscount)
         : Math.max(0, grandTotalRaw || subtotalAfterDiscount + taxAmount)
       : subtotalAfterDiscount;
+  const downPaymentPercent = Math.min(
+    100,
+    hasDpPercentOverride
+      ? Math.max(0, includeDpPercentParsed)
+      : Math.max(0, Number(data.down_payment_percent) || Math.max(0, Number(legacyMeta?.downPaymentPercent) || 0))
+  );
+  const downPaymentAmount = Math.round((total * downPaymentPercent) / 100);
+  const remainingAmount = Math.max(0, total - downPaymentAmount);
   const taxTermsLine =
     taxMode === "include"
       ? "Harga diatas sudah termasuk Faktur Pajak."
@@ -490,6 +510,18 @@ export default async function DokumenPage({
         <div className="total">
           {totalLabel}: {rupiah(total)}
         </div>
+        {!isPenawaran && downPaymentPercent > 0 ? (
+          <div className="mt-1 grid gap-1 text-xs text-slate-700">
+            <div className="flex justify-end gap-2">
+              <span>DP Dibayar ({formatPercent(downPaymentPercent)}%)</span>
+              <strong>{rupiah(downPaymentAmount)}</strong>
+            </div>
+            <div className="flex justify-end gap-2">
+              <span>Sisa Tagihan</span>
+              <strong>{rupiah(remainingAmount)}</strong>
+            </div>
+          </div>
+        ) : null}
         <div className="notes">
           <strong>Catatan:</strong> {cleanNotes || "-"}
         </div>

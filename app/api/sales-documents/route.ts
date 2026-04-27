@@ -31,11 +31,13 @@ type SalesDocumentRequest = {
   taxRate?: number;
   taxAmount?: number;
   grandTotal?: number;
+  downPaymentPercent?: number;
   markPrinted?: boolean;
 };
 
 type LegacyDocumentMeta = {
   discountAmount?: number;
+  downPaymentPercent?: number;
   taxEnabled?: boolean;
   taxMode?: "exclude" | "include";
   taxRate?: number;
@@ -97,7 +99,8 @@ function isMissingTaxColumnError(message: string) {
       text.includes("tax_rate") ||
       text.includes("tax_amount") ||
       text.includes("tax_mode") ||
-      text.includes("discount_amount")
+      text.includes("discount_amount") ||
+      text.includes("down_payment_percent")
     )
   );
 }
@@ -113,6 +116,7 @@ function buildLegacyMetaNotes(notes: string, meta: LegacyDocumentMeta) {
   const baseNotes = stripLegacyMetaNotes(notes);
   const safeMeta = {
     discountAmount: Math.max(0, Number(meta.discountAmount) || 0),
+    downPaymentPercent: Math.min(100, Math.max(0, Number(meta.downPaymentPercent) || 0)),
     taxEnabled: Boolean(meta.taxEnabled),
     taxMode: meta.taxMode === "include" ? "include" : "exclude",
     taxRate: Math.max(0, Number(meta.taxRate) || 0),
@@ -157,6 +161,10 @@ export async function POST(request: NextRequest) {
     const taxMode = body.taxMode === "include" ? "include" : "exclude";
     const taxRate = Math.max(0, Number(body.taxRate) || 11);
     const taxAmount = taxEnabled ? Math.max(0, Math.round(Number(body.taxAmount) || 0)) : 0;
+    const downPaymentPercentRaw = Number(body.downPaymentPercent);
+    const downPaymentPercent = Math.round(
+      Math.min(100, Math.max(0, Number.isFinite(downPaymentPercentRaw) ? downPaymentPercentRaw : 0)) * 100
+    ) / 100;
     const grandTotal = Math.max(
       0,
       Math.round(Number(body.grandTotal) || discountedSubtotal + taxAmount)
@@ -212,6 +220,7 @@ export async function POST(request: NextRequest) {
       items,
       subtotal,
       discount_amount: discountAmount,
+      down_payment_percent: downPaymentPercent,
       last_printed_at: markPrinted ? new Date().toISOString() : null
     };
     const payloadBaseLegacyNoDiscount = {
@@ -228,6 +237,7 @@ export async function POST(request: NextRequest) {
       sales_pic: documentType === "penawaran" ? String(body.salesPic || "").trim() : "",
       notes: buildLegacyMetaNotes(String(body.notes || "").trim(), {
         discountAmount,
+        downPaymentPercent,
         taxEnabled,
         taxMode,
         taxRate,

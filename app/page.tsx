@@ -90,6 +90,7 @@ type SalesDocumentDetailResponse = {
     items: Array<{ nama: string; qty: number; harga: number }>;
     subtotal: number;
     discountAmount?: number;
+    downPaymentPercent?: number;
     taxEnabled: boolean;
     taxRate: number;
     taxAmount: number;
@@ -624,6 +625,27 @@ function getLocalDateKey(date = new Date()) {
   return `${year}${month}${day}`;
 }
 
+function parseFlexiblePercent(value: unknown) {
+  if (typeof value === "number") return value;
+  const raw = String(value ?? "").trim();
+  if (!raw) return 0;
+  const normalized = raw.replace("%", "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function resolveInvoiceDocType(
+  rawType: unknown,
+  documentNo?: string | null
+): InvoiceDocumentType {
+  const normalizedType = String(rawType || "").trim().toLowerCase();
+  if (normalizedType === "penawaran") return "penawaran";
+  if (normalizedType === "faktur") return "faktur";
+  const normalizedNo = String(documentNo || "").trim().toUpperCase();
+  if (normalizedNo.startsWith("STCSPN-")) return "penawaran";
+  return "faktur";
+}
+
 function getNextInvoiceNumber(docType: InvoiceDocumentType = "faktur") {
   const todayKey = getLocalDateKey(new Date());
   let nextSeq = 1;
@@ -1043,7 +1065,7 @@ function ToggleRow({
 export default function Page() {
   const [harga, setHarga] = useState(0);
   const [modal, setModal] = useState(0);
-  const [targetMargin, setTargetMargin] = useState(5);
+  const [targetMargin, setTargetMargin] = useState(0);
   const [priceSourceUrl, setPriceSourceUrl] = useState("");
   const [priceFetchTarget, setPriceFetchTarget] = useState<PriceFetchTarget>("modal");
   const [isPriceFetching, setIsPriceFetching] = useState(false);
@@ -1119,6 +1141,7 @@ export default function Page() {
   const [invoicePhone, setInvoicePhone] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
   const [invoiceDiscountAmount, setInvoiceDiscountAmount] = useState(0);
+  const [invoiceDownPaymentPercent, setInvoiceDownPaymentPercent] = useState(0);
   const [invoiceTaxEnabled, setInvoiceTaxEnabled] = useState(false);
   const [invoiceTaxMode, setInvoiceTaxMode] = useState<InvoiceTaxMode>("exclude");
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
@@ -1960,6 +1983,7 @@ export default function Page() {
     setInvoicePhone("");
     setInvoiceWhatsapp("");
     setInvoiceDiscountAmount(0);
+    setInvoiceDownPaymentPercent(0);
     setInvoiceTaxEnabled(false);
     setInvoiceTaxMode("exclude");
     setInvoiceIncludeBankAccount(true);
@@ -2016,6 +2040,22 @@ export default function Page() {
           : invoiceSubtotalAfterDiscount + invoiceTaxAmount
         : invoiceSubtotalAfterDiscount,
     [invoiceSubtotalAfterDiscount, invoiceTaxAmount, invoiceTaxEnabled, invoiceTaxMode]
+  );
+  const isFakturDocContext = useMemo(
+    () => resolveInvoiceDocType(invoiceDocType, invoiceNo) === "faktur",
+    [invoiceDocType, invoiceNo]
+  );
+  const invoiceDownPaymentPercentValue = useMemo(
+    () => Math.round(Math.min(100, Math.max(0, Number(invoiceDownPaymentPercent) || 0)) * 100) / 100,
+    [invoiceDownPaymentPercent]
+  );
+  const invoiceDownPaymentAmount = useMemo(
+    () => Math.round((invoiceGrandTotal * invoiceDownPaymentPercentValue) / 100),
+    [invoiceGrandTotal, invoiceDownPaymentPercentValue]
+  );
+  const invoiceRemainingAmount = useMemo(
+    () => Math.max(0, invoiceGrandTotal - invoiceDownPaymentAmount),
+    [invoiceDownPaymentAmount, invoiceGrandTotal]
   );
 
   useEffect(() => {
@@ -2121,6 +2161,7 @@ export default function Page() {
           items: normalizedItems,
           subtotal: invoiceSubtotal,
           discountAmount: invoiceDiscountValue,
+          downPaymentPercent: isFakturDocContext ? invoiceDownPaymentPercentValue : 0,
           taxEnabled: invoiceTaxEnabled,
           taxMode: invoiceTaxMode,
           taxRate: invoiceTaxRate,
@@ -2414,6 +2455,14 @@ export default function Page() {
                 : ""
           }
           <div class="total">${totalLabel}: ${rupiah(invoiceGrandTotal)}</div>
+          ${
+            isFakturDocContext && invoiceDownPaymentPercentValue > 0
+              ? `<div style="margin-top:4px;display:grid;gap:3px;font-size:10px;">
+                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>DP Dibayar (${invoiceDownPaymentPercentValue.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%)</span><strong>${rupiah(invoiceDownPaymentAmount)}</strong></div>
+                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Sisa Tagihan</span><strong>${rupiah(invoiceRemainingAmount)}</strong></div>
+                </div>`
+              : ""
+          }
           <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
           ${
             showBankAccount && invoiceDocType === "faktur"
@@ -2592,6 +2641,12 @@ export default function Page() {
             ]
           : []),
       `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceGrandTotal)}*`,
+      ...(isFakturDocContext && invoiceDownPaymentPercentValue > 0
+        ? [
+            `DP Dibayar (${invoiceDownPaymentPercentValue.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%): ${rupiah(invoiceDownPaymentAmount)}`,
+            `Sisa Tagihan: ${rupiah(invoiceRemainingAmount)}`
+          ]
+        : []),
       `Catatan: ${invoiceNotes || "-"}`,
       `Link dokumen: ${getDocumentShareUrl(savedDoc.publicToken)}`
     ].join("\n");
@@ -2714,7 +2769,6 @@ export default function Page() {
             }))
           : [{ id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }];
 
-      setInvoiceDocType(detail.documentType === "penawaran" ? "penawaran" : "faktur");
       setInvoiceNo(detail.documentNo || "");
       setInvoicePublicToken(detail.publicToken || publicToken);
       setInvoiceDate(detail.invoiceDate || new Date().toISOString().slice(0, 10));
@@ -2732,6 +2786,10 @@ export default function Page() {
           Math.max(0, Number(detail.discountAmount) || 0)
         )
       );
+      const nextDocType = resolveInvoiceDocType(detail.documentType, detail.documentNo);
+      const detailDpPercent = Math.min(100, Math.max(0, parseFlexiblePercent(detail.downPaymentPercent)));
+      setInvoiceDocType(nextDocType);
+      setInvoiceDownPaymentPercent(nextDocType === "faktur" ? detailDpPercent : 0);
       setInvoiceTaxEnabled(Boolean(detail.taxEnabled));
       const detailTaxMode =
         detail.taxMode === "include" || detail.taxMode === "exclude"
@@ -2782,17 +2840,20 @@ export default function Page() {
     let includeTaxRate = String(invoiceTaxRate);
     let includeTaxAmount = String(invoiceTaxEnabled ? invoiceTaxAmount : 0);
     let includeDiscountAmount = String(invoiceDiscountValue);
+    let includeDpPercent = String(isFakturDocContext ? invoiceDownPaymentPercentValue : 0);
     try {
       const response = await fetch(`/api/sales-documents/${publicToken}`);
       const payload = (await response.json()) as SalesDocumentDetailResponse;
       if (response.ok && payload.ok && payload.data) {
         const detail = payload.data;
+        const detailDocType = resolveInvoiceDocType(detail.documentType, detail.documentNo);
         const subtotal = Math.max(0, Number(detail.subtotal) || 0);
         const detailTaxEnabled = Boolean(detail.taxEnabled);
         const detailTaxMode = detail.taxMode === "include" ? "include" : "exclude";
         const detailTaxRate = Math.max(0, Number(detail.taxRate) || invoiceTaxRate);
         const detailTaxAmount = Math.max(0, Number(detail.taxAmount) || 0);
         const detailGrandTotal = Math.max(0, Number(detail.grandTotal) || 0);
+        const detailDpPercent = Math.min(100, Math.max(0, parseFlexiblePercent(detail.downPaymentPercent)));
         const discountFromData = Math.min(subtotal, Math.max(0, Number(detail.discountAmount) || 0));
         const inferredDiscountFromTotals = Math.max(
           0,
@@ -2811,6 +2872,7 @@ export default function Page() {
         includeTaxMode = detailTaxMode;
         includeTaxRate = String(detailTaxRate);
         includeDiscountAmount = String(discount);
+        includeDpPercent = String(detailDocType === "faktur" ? detailDpPercent : 0);
         if (detailTaxEnabled) {
           const computedTax =
             detailTaxMode === "include"
@@ -2833,6 +2895,7 @@ export default function Page() {
       includeTaxRate,
       includeTaxAmount,
       includeDiscountAmount,
+      includeDpPercent,
       includeSJ: invoiceIncludeSuratJalan ? "1" : "0"
     });
     const url = `/dokumen/${publicToken}?${params.toString()}`;
@@ -4907,36 +4970,6 @@ export default function Page() {
     mallAfiliasiPct
   ]);
 
-  const marketplaceHighlights = [
-    {
-      key: "tokopedia",
-      title: MARKETPLACE_VISUAL.tokopedia.label,
-      subtitle: "Marketplace stabil untuk jaga margin",
-      net: hasil.tokopedia.net,
-      margin: hasil.marginTokopedia,
-      pct: hasil.pctTokopedia,
-      rekom: hasil.rekomTokopedia
-    },
-    {
-      key: "shopee",
-      title: MARKETPLACE_VISUAL.shopee.label,
-      subtitle: "Komponen promo paling fleksibel",
-      net: hasil.shopee.net,
-      margin: hasil.marginShopee,
-      pct: hasil.pctShopee,
-      rekom: hasil.rekomShopee
-    },
-    {
-      key: "mall",
-      title: MARKETPLACE_VISUAL.mall.label,
-      subtitle: "Cocok untuk branding official store",
-      net: hasil.mall.net,
-      margin: hasil.marginMall,
-      pct: hasil.pctMall,
-      rekom: hasil.rekomMall
-    }
-  ] as const;
-
   const tokopediaFeatureCount = Number(tokopediaGratisOngkir) + Number(tokopediaAfiliasiAktif);
   const shopeeFeatureCount =
     Number(shopeeGratisOngkir !== "off") +
@@ -5011,7 +5044,6 @@ export default function Page() {
   const canDeleteRecap = currentRole === "admin";
   const canManagePreset = currentRole === "admin" || currentRole === "staff";
   const shouldShowDesktopSidebar = !isNavHidden || currentRole === "admin";
-  const canQuickSwitchSection = allowedSections.length > 1;
   const roleEntries = useMemo(
     () => Object.entries(roleMap).sort((a, b) => a[0].localeCompare(b[0])),
     [roleMap]
@@ -5119,96 +5151,56 @@ export default function Page() {
                 Simulasi biaya Tokopedia, Shopee, dan Tokopedia Mall dalam satu dashboard yang lebih dinamis.
               </p>
             </div>
-            <div className="rounded-2xl border border-stone-200 bg-white/90 px-3 py-2 text-xs text-slate-600">
-              <p className="break-all">
-                Login: <strong className="text-slate-900">{authUser.email}</strong>
-              </p>
-              <p>
-                Role: <strong className="uppercase text-slate-900">{authUser.role.replace(/_/g, " ")}</strong>
-              </p>
+            <div className="flex items-start gap-2">
               <button
                 type="button"
-                onClick={handleLogout}
-                className="mt-1 rounded-xl border border-stone-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
+                onClick={() => setIsNavHidden((current) => !current)}
+                aria-label={isNavHidden ? "Tampilkan navigasi" : "Sembunyikan navigasi"}
+                title={isNavHidden ? "Tampilkan navigasi" : "Sembunyikan navigasi"}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-stone-300 bg-white/90 px-3 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
               >
-                Logout
+                <span className="grid gap-1">
+                  <span className="block h-0.5 w-4 rounded bg-current" />
+                  <span className="block h-0.5 w-4 rounded bg-current" />
+                  <span className="block h-0.5 w-4 rounded bg-current" />
+                </span>
+                <span>Menu</span>
               </button>
+              <div className="rounded-2xl border border-stone-200 bg-white/90 px-3 py-2 text-xs text-slate-600">
+                <p className="break-all">
+                  Login: <strong className="text-slate-900">{authUser.email}</strong>
+                </p>
+                <p>
+                  Role: <strong className="uppercase text-slate-900">{authUser.role.replace(/_/g, " ")}</strong>
+                </p>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="mt-1 rounded-xl border border-stone-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
+                >
+                  Logout
+                </button>
+              </div>
             </div>
           </div>
-          {activeSection === "kalkulator-potongan" ? (
-            <div className="grid gap-2 md:grid-cols-3">
-              {marketplaceHighlights.map((item, index) => {
-                const visual = MARKETPLACE_VISUAL[item.key];
-                return (
-                  <div
-                    key={`top-highlight-${item.key}`}
-                    className={`animate-sweep-in relative overflow-hidden rounded-2xl border border-white/80 bg-white/90 p-3 ring-1 ${visual.ring}`}
-                    style={{ animationDelay: `${index * 90}ms` }}
-                  >
-                    <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${visual.gradient}`} />
-                    <div className="relative">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <span className={`rounded-lg px-2 py-0.5 text-[10px] font-bold tracking-[0.14em] ${visual.badge}`}>
-                          {visual.short}
-                        </span>
-                        <span className="text-[11px] text-slate-500">{item.pct.toFixed(2)}%</span>
-                      </div>
-                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                      <p className="text-[11px] text-slate-600">{item.subtitle}</p>
-                      <p className={`mt-2 text-sm font-semibold ${visual.text}`}>Margin: {rupiah(item.margin)}</p>
-                      <p className="text-[11px] text-slate-600">Net: {rupiah(item.net)}</p>
-                      <p className="text-[11px] text-slate-500">Rekomendasi: {rupiahOrDash(item.rekom)}</p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
         </div>
       </header>
-
-      <div className="mb-3 flex justify-end">
-        <button
-          type="button"
-          onClick={() => setIsNavHidden((current) => !current)}
-          className="rounded-2xl border border-stone-300 bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
-        >
-          {isNavHidden ? "Tampilkan Navigasi" : "Sembunyikan Navigasi"}
-        </button>
-      </div>
-
-      {canQuickSwitchSection ? (
-        <div className="mb-4 grid gap-2 rounded-2xl border border-stone-200 bg-white/85 p-3 sm:grid-cols-[1fr_auto] sm:items-end">
-          <label className="grid gap-1 text-xs text-slate-600">
-            <span className="font-semibold uppercase tracking-[0.12em] text-stone-600">Menu Aktif</span>
-            <select
-              value={activeSection}
-              onChange={(e) => setActiveSection(e.target.value as SectionId)}
-              className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
-            >
-              {allowedSections.map((section) => (
-                <option key={`quick-switch-${section}`} value={section}>
-                  {SECTION_LABEL[section]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="text-xs text-slate-500">
-            Sedang di: <strong className="text-slate-700">{SECTION_LABEL[activeSection]}</strong>
-          </p>
-        </div>
-      ) : null}
 
       {!isNavHidden ? (
       <div className="sticky top-2 z-30 mb-4 lg:hidden">
         <div className="card-shell border-stone-200/80 bg-white/90 p-2 backdrop-blur-md">
-          <p className="mb-2 px-1 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div>
+            <p className="px-1 text-xs font-semibold uppercase tracking-[0.12em] text-stone-600">Navigasi</p>
+            <p className="px-1 text-[11px] text-slate-500">
+              Aktif: <strong className="text-slate-700">{SECTION_LABEL[activeSection]}</strong>
+            </p>
+          </div>
+          <div className="mt-2 grid gap-2">
             {allowedSections.includes("kalkulator-potongan") ? (
               <button
                 type="button"
                 onClick={() => setActiveSection("kalkulator-potongan")}
-                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                className={`rounded-xl border px-3 py-2 text-left text-sm font-medium transition ${
                   activeSection === "kalkulator-potongan"
                     ? "border-emerald-300 bg-emerald-50 text-emerald-700"
                     : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
@@ -5221,7 +5213,7 @@ export default function Page() {
               <button
                 type="button"
                 onClick={() => setActiveSection("compare-harga")}
-                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                className={`rounded-xl border px-3 py-2 text-left text-sm font-medium transition ${
                   activeSection === "compare-harga"
                     ? "border-cyan-300 bg-cyan-50 text-cyan-700"
                     : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
@@ -5234,7 +5226,7 @@ export default function Page() {
               <button
                 type="button"
                 onClick={() => setActiveSection("pembuatan-nota")}
-                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                className={`rounded-xl border px-3 py-2 text-left text-sm font-medium transition ${
                   activeSection === "pembuatan-nota"
                     ? "border-orange-300 bg-orange-50 text-orange-700"
                     : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
@@ -5247,7 +5239,7 @@ export default function Page() {
               <button
                 type="button"
                 onClick={() => setActiveSection("rekap-penjualan")}
-                className={`whitespace-nowrap rounded-xl border px-3 py-2 text-sm font-medium transition ${
+                className={`rounded-xl border px-3 py-2 text-left text-sm font-medium transition ${
                   activeSection === "rekap-penjualan"
                     ? "border-sky-300 bg-sky-50 text-sky-700"
                     : "border-stone-200 bg-white text-slate-700 hover:bg-stone-50"
@@ -6551,6 +6543,26 @@ export default function Page() {
                       className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
                     />
                   </label>
+                  <label className="grid gap-1">
+                    <span>DP Dibayar (%)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.01}
+                      value={invoiceDownPaymentPercent}
+                      disabled={!isFakturDocContext}
+                      onChange={(e) =>
+                        setInvoiceDownPaymentPercent(
+                          Math.min(100, Math.max(0, Number(e.target.value || 0)))
+                        )
+                      }
+                      className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-500"
+                    />
+                    {!isFakturDocContext ? (
+                      <span className="text-xs text-slate-500">DP hanya untuk dokumen faktur.</span>
+                    ) : null}
+                  </label>
                 </div>
                 <div className="mt-2 grid gap-1 text-sm text-slate-700">
                   {invoiceTaxEnabled ? (
@@ -6580,6 +6592,16 @@ export default function Page() {
                   <div className="flex justify-end font-bold text-slate-900">
                     Total: {rupiah(invoiceGrandTotal)}
                   </div>
+                  {isFakturDocContext && invoiceDownPaymentPercentValue > 0 ? (
+                    <>
+                      <div className="flex justify-end">
+                        DP Dibayar ({invoiceDownPaymentPercentValue.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%): {rupiah(invoiceDownPaymentAmount)}
+                      </div>
+                      <div className="flex justify-end font-semibold text-slate-800">
+                        Sisa Tagihan: {rupiah(invoiceRemainingAmount)}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </div>
 
