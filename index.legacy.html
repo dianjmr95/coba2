@@ -427,8 +427,13 @@
           <div class="toggle-group tokopedia">
             <h3>Tokopedia</h3>
             <label class="toggle-item">
-              <span>Gratis Ongkir Tokopedia <small>4% (maks Rp 40.000)</small></span>
-              <input id="tokopediaGratisOngkir" type="checkbox" checked />
+              <span>Gratis Ongkir Tokopedia <small>Pilih persentase (maks Rp 650.000)</small></span>
+              <select id="tokopediaGratisOngkir">
+                <option value="off">Tidak aktif</option>
+                <option value="3">3%</option>
+                <option value="4" selected>4%</option>
+                <option value="6">6%</option>
+              </select>
             </label>
             <label class="toggle-item">
               <span>Komisi Afiliasi Tokopedia <small>Opsional, isi persen sesuai kebutuhan</small></span>
@@ -487,8 +492,13 @@
               <input id="mallBiayaJasa" type="checkbox" checked />
             </label>
             <label class="toggle-item">
-              <span>Gratis Ongkir Tokopedia Mall <small>4% (maks Rp 40.000)</small></span>
-              <input id="mallGratisOngkir" type="checkbox" checked />
+              <span>Gratis Ongkir Tokopedia Mall <small>Pilih persentase (maks Rp 650.000)</small></span>
+              <select id="mallGratisOngkir">
+                <option value="off">Tidak aktif</option>
+                <option value="3">3%</option>
+                <option value="4" selected>4%</option>
+                <option value="6">6%</option>
+              </select>
             </label>
             <label class="toggle-item">
               <span>Komisi Afiliasi Tokopedia Mall <small>Opsional, isi persen sesuai kebutuhan</small></span>
@@ -577,7 +587,8 @@
       const biayaProses = 1250;
       const biayaFix = 5060;
       const admin = percent(harga, fee);
-      const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
+      const gratisOngkirCfg = parseTokopediaGratisOngkir(enabledGratisOngkir);
+      const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
       const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
       const total = admin + biayaProses + biayaFix + gratisOngkir + affiliate;
       const rincian = [
@@ -586,7 +597,7 @@
         { label: "Biaya Fix", value: biayaFix }
       ];
 
-      if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
+      if (gratisOngkirCfg.active) rincian.push({ label: `Gratis Ongkir (${gratisOngkirCfg.label})`, value: gratisOngkir });
       if (affiliate > 0) rincian.push({ label: `Komisi Afiliasi (${affiliatePct}%)`, value: affiliate });
 
       return { total, net: harga - total, rincian };
@@ -604,6 +615,12 @@
         cap: capValue,
         label: `${kategoriLabel}, ${pct}%`
       };
+    }
+
+    function parseTokopediaGratisOngkir(mode) {
+      if (!mode || mode === "off") return { active: false, pct: 0, cap: 0, label: "Tidak aktif" };
+      const pct = Number(mode || 0);
+      return { active: true, pct, cap: 650000, label: `${pct}% (maks Rp 650.000)` };
     }
 
     function calcPotonganShopee(harga, fee, affiliatePct, shopeeGratisOngkirMode, enabledPromo, enabledAsuransi, enabledAffiliate) {
@@ -635,7 +652,8 @@
       const biayaFix = 5060;
       const admin = percent(harga, fee);
       const biayaJasa = enabledBiayaJasa ? cap(percent(harga, 1.8), 50000) : 0;
-      const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
+      const gratisOngkirCfg = parseTokopediaGratisOngkir(enabledGratisOngkir);
+      const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
       const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
       const total = admin + biayaProses + biayaFix + biayaJasa + gratisOngkir + affiliate;
       const rincian = [
@@ -645,7 +663,7 @@
       ];
 
       if (enabledBiayaJasa) rincian.push({ label: "Biaya Jasa", value: biayaJasa });
-      if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
+      if (gratisOngkirCfg.active) rincian.push({ label: `Gratis Ongkir (${gratisOngkirCfg.label})`, value: gratisOngkir });
       if (affiliate > 0) rincian.push({ label: `Komisi Afiliasi (${affiliatePct}%)`, value: affiliate });
 
       return { total, net: harga - total, rincian };
@@ -682,7 +700,7 @@
         harga,
         tokopediaFee,
         tokopediaAffiliateFee,
-        f("tokopediaGratisOngkir").checked,
+        f("tokopediaGratisOngkir").value,
         f("tokopediaAfiliasiAktif").checked
       );
 
@@ -701,7 +719,7 @@
         mallFee,
         mallAffiliateFee,
         f("mallBiayaJasa").checked,
-        f("mallGratisOngkir").checked,
+        f("mallGratisOngkir").value,
         f("mallAfiliasiAktif").checked
       );
 

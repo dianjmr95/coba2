@@ -14,6 +14,7 @@ type ShopeeOngkirMode =
   | "atas-3.5"
   | "atas-5"
   | "atas-7";
+type TokopediaOngkirMode = "off" | "3" | "4" | "6";
 
 type RincianItem = {
   label: string;
@@ -30,7 +31,7 @@ type PresetData = {
   tokopediaFee: string;
   shopeeFee: string;
   mallFee: string;
-  tokopediaGratisOngkir: boolean;
+  tokopediaGratisOngkir: TokopediaOngkirMode;
   tokopediaAfiliasiAktif: boolean;
   tokopediaAfiliasiPct: number;
   shopeeGratisOngkir: ShopeeOngkirMode;
@@ -39,7 +40,7 @@ type PresetData = {
   shopeeAfiliasiAktif: boolean;
   shopeeAfiliasiPct: number;
   mallBiayaJasa: boolean;
-  mallGratisOngkir: boolean;
+  mallGratisOngkir: TokopediaOngkirMode;
   mallAfiliasiAktif: boolean;
   mallAfiliasiPct: number;
 };
@@ -280,7 +281,7 @@ const DEFAULT_PRESET_DATA: PresetData = {
   tokopediaFee: "4.75",
   shopeeFee: "5.25",
   mallFee: "3",
-  tokopediaGratisOngkir: true,
+  tokopediaGratisOngkir: "4",
   tokopediaAfiliasiAktif: false,
   tokopediaAfiliasiPct: 2,
   shopeeGratisOngkir: "bawah-1",
@@ -289,7 +290,7 @@ const DEFAULT_PRESET_DATA: PresetData = {
   shopeeAfiliasiAktif: false,
   shopeeAfiliasiPct: 2,
   mallBiayaJasa: true,
-  mallGratisOngkir: true,
+  mallGratisOngkir: "4",
   mallAfiliasiAktif: false,
   mallAfiliasiPct: 2
 };
@@ -791,13 +792,30 @@ function normalizePresetData(value: unknown): PresetData | null {
   ].includes(rawShopeeMode)
     ? (rawShopeeMode as ShopeeOngkirMode)
     : DEFAULT_PRESET_DATA.shopeeGratisOngkir;
+  const rawTokopediaMode = v.tokopediaGratisOngkir;
+  const tokopediaGratisOngkir: TokopediaOngkirMode =
+    rawTokopediaMode === true
+      ? "4"
+      : rawTokopediaMode === false
+        ? "off"
+        : typeof rawTokopediaMode === "string" && ["off", "3", "4", "6"].includes(rawTokopediaMode)
+          ? (rawTokopediaMode as TokopediaOngkirMode)
+          : DEFAULT_PRESET_DATA.tokopediaGratisOngkir;
+  const rawMallMode = v.mallGratisOngkir;
+  const mallGratisOngkir: TokopediaOngkirMode =
+    rawMallMode === true
+      ? "4"
+      : rawMallMode === false
+        ? "off"
+        : typeof rawMallMode === "string" && ["off", "3", "4", "6"].includes(rawMallMode)
+          ? (rawMallMode as TokopediaOngkirMode)
+          : DEFAULT_PRESET_DATA.mallGratisOngkir;
 
   return {
     tokopediaFee: typeof v.tokopediaFee === "string" ? v.tokopediaFee : DEFAULT_PRESET_DATA.tokopediaFee,
     shopeeFee: typeof v.shopeeFee === "string" ? v.shopeeFee : DEFAULT_PRESET_DATA.shopeeFee,
     mallFee: typeof v.mallFee === "string" ? v.mallFee : DEFAULT_PRESET_DATA.mallFee,
-    tokopediaGratisOngkir:
-      typeof v.tokopediaGratisOngkir === "boolean" ? v.tokopediaGratisOngkir : DEFAULT_PRESET_DATA.tokopediaGratisOngkir,
+    tokopediaGratisOngkir,
     tokopediaAfiliasiAktif:
       typeof v.tokopediaAfiliasiAktif === "boolean" ? v.tokopediaAfiliasiAktif : DEFAULT_PRESET_DATA.tokopediaAfiliasiAktif,
     tokopediaAfiliasiPct:
@@ -814,7 +832,7 @@ function normalizePresetData(value: unknown): PresetData | null {
         ? v.shopeeAfiliasiPct
         : DEFAULT_PRESET_DATA.shopeeAfiliasiPct,
     mallBiayaJasa: typeof v.mallBiayaJasa === "boolean" ? v.mallBiayaJasa : DEFAULT_PRESET_DATA.mallBiayaJasa,
-    mallGratisOngkir: typeof v.mallGratisOngkir === "boolean" ? v.mallGratisOngkir : DEFAULT_PRESET_DATA.mallGratisOngkir,
+    mallGratisOngkir,
     mallAfiliasiAktif:
       typeof v.mallAfiliasiAktif === "boolean" ? v.mallAfiliasiAktif : DEFAULT_PRESET_DATA.mallAfiliasiAktif,
     mallAfiliasiPct:
@@ -865,17 +883,27 @@ function parseShopeeGratisOngkir(mode: ShopeeOngkirMode) {
   };
 }
 
+function parseTokopediaGratisOngkir(mode: TokopediaOngkirMode) {
+  if (mode === "off") {
+    return { active: false, pct: 0, cap: 0, label: "Tidak aktif" };
+  }
+
+  const pct = Number(mode || 0);
+  return { active: true, pct, cap: 650000, label: `${pct}% (maks Rp 650.000)` };
+}
+
 function calcTokopedia(
   harga: number,
   fee: number,
   affiliatePct: number,
-  enabledGratisOngkir: boolean,
+  tokopediaGratisOngkirMode: TokopediaOngkirMode,
   enabledAffiliate: boolean
 ): CalcResult {
   const biayaProses = 1250;
   const biayaFix = 5060;
   const admin = percent(harga, fee);
-  const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
+  const gratisOngkirCfg = parseTokopediaGratisOngkir(tokopediaGratisOngkirMode);
+  const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
   const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
   const total = admin + biayaProses + biayaFix + gratisOngkir + affiliate;
 
@@ -885,7 +913,7 @@ function calcTokopedia(
     { label: "Biaya Fix", value: biayaFix }
   ];
 
-  if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
+  if (gratisOngkirCfg.active) rincian.push({ label: `Gratis Ongkir (${gratisOngkirCfg.label})`, value: gratisOngkir });
   if (affiliate > 0) rincian.push({ label: `Komisi Afiliasi (${affiliatePct}%)`, value: affiliate });
 
   return { total, net: harga - total, rincian };
@@ -929,14 +957,15 @@ function calcMall(
   fee: number,
   affiliatePct: number,
   enabledBiayaJasa: boolean,
-  enabledGratisOngkir: boolean,
+  mallGratisOngkirMode: TokopediaOngkirMode,
   enabledAffiliate: boolean
 ): CalcResult {
   const biayaProses = 1250;
   const biayaFix = 5060;
   const admin = percent(harga, fee);
   const biayaJasa = enabledBiayaJasa ? cap(percent(harga, 1.8), 50000) : 0;
-  const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
+  const gratisOngkirCfg = parseTokopediaGratisOngkir(mallGratisOngkirMode);
+  const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
   const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
   const total = admin + biayaProses + biayaFix + biayaJasa + gratisOngkir + affiliate;
 
@@ -947,7 +976,7 @@ function calcMall(
   ];
 
   if (enabledBiayaJasa) rincian.push({ label: "Biaya Jasa", value: biayaJasa });
-  if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
+  if (gratisOngkirCfg.active) rincian.push({ label: `Gratis Ongkir (${gratisOngkirCfg.label})`, value: gratisOngkir });
   if (affiliate > 0) rincian.push({ label: `Komisi Afiliasi (${affiliatePct}%)`, value: affiliate });
 
   return { total, net: harga - total, rincian };
@@ -1098,7 +1127,7 @@ export default function Page() {
   const [shopeeFee, setShopeeFee] = useState("5.25");
   const [mallFee, setMallFee] = useState("3");
 
-  const [tokopediaGratisOngkir, setTokopediaGratisOngkir] = useState(true);
+  const [tokopediaGratisOngkir, setTokopediaGratisOngkir] = useState<TokopediaOngkirMode>("4");
   const [tokopediaAfiliasiAktif, setTokopediaAfiliasiAktif] = useState(false);
   const [tokopediaAfiliasiPct, setTokopediaAfiliasiPct] = useState(2);
 
@@ -1109,7 +1138,7 @@ export default function Page() {
   const [shopeeAfiliasiPct, setShopeeAfiliasiPct] = useState(2);
 
   const [mallBiayaJasa, setMallBiayaJasa] = useState(true);
-  const [mallGratisOngkir, setMallGratisOngkir] = useState(true);
+  const [mallGratisOngkir, setMallGratisOngkir] = useState<TokopediaOngkirMode>("4");
   const [mallAfiliasiAktif, setMallAfiliasiAktif] = useState(false);
   const [mallAfiliasiPct, setMallAfiliasiPct] = useState(2);
   const [presetName, setPresetName] = useState("");
@@ -5000,13 +5029,13 @@ export default function Page() {
     mallAfiliasiPct
   ]);
 
-  const tokopediaFeatureCount = Number(tokopediaGratisOngkir) + Number(tokopediaAfiliasiAktif);
+  const tokopediaFeatureCount = Number(tokopediaGratisOngkir !== "off") + Number(tokopediaAfiliasiAktif);
   const shopeeFeatureCount =
     Number(shopeeGratisOngkir !== "off") +
     Number(shopeePromo) +
     Number(shopeeAsuransi) +
     Number(shopeeAfiliasiAktif);
-  const mallFeatureCount = Number(mallBiayaJasa) + Number(mallGratisOngkir) + Number(mallAfiliasiAktif);
+  const mallFeatureCount = Number(mallBiayaJasa) + Number(mallGratisOngkir !== "off") + Number(mallAfiliasiAktif);
   const sectionMeta: Record<
     SectionId,
     { title: string; subtitle: string; tone: string; chip: string; dot: string; badge: string; stats: string[] }
@@ -6274,8 +6303,17 @@ export default function Page() {
                 <h3 className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Tokopedia</h3>
                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">{tokopediaFeatureCount} fitur aktif</span>
               </div>
-              <ToggleRow title="Gratis Ongkir Tokopedia" subtitle="4% (maks Rp 40.000)">
-                <input type="checkbox" checked={tokopediaGratisOngkir} onChange={(e) => setTokopediaGratisOngkir(e.target.checked)} className="h-4 w-4 accent-stone-700" />
+              <ToggleRow title="Gratis Ongkir Tokopedia" subtitle="Pilih persentase (maks Rp 650.000)">
+                <select
+                  value={tokopediaGratisOngkir}
+                  onChange={(e) => setTokopediaGratisOngkir(e.target.value as TokopediaOngkirMode)}
+                  className="w-full max-w-[220px] rounded-xl border border-stone-200 px-2 py-1 text-sm outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                >
+                  <option value="off">Tidak aktif</option>
+                  <option value="3">3%</option>
+                  <option value="4">4%</option>
+                  <option value="6">6%</option>
+                </select>
               </ToggleRow>
               <ToggleRow title="Komisi Afiliasi Tokopedia" subtitle="Opsional, isi persen sesuai kebutuhan">
                 <div className="flex flex-wrap items-center justify-end gap-2">
@@ -6331,8 +6369,17 @@ export default function Page() {
               <ToggleRow title="Biaya Jasa Tokopedia Mall" subtitle="1.8% (maks Rp 50.000)">
                 <input type="checkbox" checked={mallBiayaJasa} onChange={(e) => setMallBiayaJasa(e.target.checked)} className="h-4 w-4 accent-stone-700" />
               </ToggleRow>
-              <ToggleRow title="Gratis Ongkir Tokopedia Mall" subtitle="4% (maks Rp 40.000)">
-                <input type="checkbox" checked={mallGratisOngkir} onChange={(e) => setMallGratisOngkir(e.target.checked)} className="h-4 w-4 accent-stone-700" />
+              <ToggleRow title="Gratis Ongkir Tokopedia Mall" subtitle="Pilih persentase (maks Rp 650.000)">
+                <select
+                  value={mallGratisOngkir}
+                  onChange={(e) => setMallGratisOngkir(e.target.value as TokopediaOngkirMode)}
+                  className="w-full max-w-[220px] rounded-xl border border-stone-200 px-2 py-1 text-sm outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                >
+                  <option value="off">Tidak aktif</option>
+                  <option value="3">3%</option>
+                  <option value="4">4%</option>
+                  <option value="6">6%</option>
+                </select>
               </ToggleRow>
               <ToggleRow title="Komisi Afiliasi Tokopedia Mall" subtitle="Opsional, isi persen sesuai kebutuhan">
                 <div className="flex flex-wrap items-center justify-end gap-2">
