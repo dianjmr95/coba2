@@ -575,13 +575,15 @@
 
     function calcPotonganTokopedia(harga, fee, affiliatePct, enabledGratisOngkir, enabledAffiliate) {
       const biayaProses = 1250;
+      const biayaFix = 5060;
       const admin = percent(harga, fee);
       const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
       const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
-      const total = admin + biayaProses + gratisOngkir + affiliate;
+      const total = admin + biayaProses + biayaFix + gratisOngkir + affiliate;
       const rincian = [
         { label: `Fee Admin (${fee}%)`, value: admin },
-        { label: "Biaya Proses", value: biayaProses }
+        { label: "Biaya Proses", value: biayaProses },
+        { label: "Biaya Fix", value: biayaFix }
       ];
 
       if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
@@ -630,14 +632,16 @@
 
     function calcPotonganMall(harga, fee, affiliatePct, enabledBiayaJasa, enabledGratisOngkir, enabledAffiliate) {
       const biayaProses = 1250;
+      const biayaFix = 5060;
       const admin = percent(harga, fee);
       const biayaJasa = enabledBiayaJasa ? cap(percent(harga, 1.8), 50000) : 0;
       const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
       const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
-      const total = admin + biayaProses + biayaJasa + gratisOngkir + affiliate;
+      const total = admin + biayaProses + biayaFix + biayaJasa + gratisOngkir + affiliate;
       const rincian = [
         { label: `Fee Admin (${fee}%)`, value: admin },
-        { label: "Biaya Proses", value: biayaProses }
+        { label: "Biaya Proses", value: biayaProses },
+        { label: "Biaya Fix", value: biayaFix }
       ];
 
       if (enabledBiayaJasa) rincian.push({ label: "Biaya Jasa", value: biayaJasa });

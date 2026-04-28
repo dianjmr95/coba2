@@ -873,14 +873,16 @@ function calcTokopedia(
   enabledAffiliate: boolean
 ): CalcResult {
   const biayaProses = 1250;
+  const biayaFix = 5060;
   const admin = percent(harga, fee);
   const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
   const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
-  const total = admin + biayaProses + gratisOngkir + affiliate;
+  const total = admin + biayaProses + biayaFix + gratisOngkir + affiliate;
 
   const rincian: RincianItem[] = [
     { label: `Fee Admin (${fee}%)`, value: admin },
-    { label: "Biaya Proses", value: biayaProses }
+    { label: "Biaya Proses", value: biayaProses },
+    { label: "Biaya Fix", value: biayaFix }
   ];
 
   if (enabledGratisOngkir) rincian.push({ label: "Gratis Ongkir", value: gratisOngkir });
@@ -931,15 +933,17 @@ function calcMall(
   enabledAffiliate: boolean
 ): CalcResult {
   const biayaProses = 1250;
+  const biayaFix = 5060;
   const admin = percent(harga, fee);
   const biayaJasa = enabledBiayaJasa ? cap(percent(harga, 1.8), 50000) : 0;
   const gratisOngkir = enabledGratisOngkir ? cap(percent(harga, 4), 40000) : 0;
   const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
-  const total = admin + biayaProses + biayaJasa + gratisOngkir + affiliate;
+  const total = admin + biayaProses + biayaFix + biayaJasa + gratisOngkir + affiliate;
 
   const rincian: RincianItem[] = [
     { label: `Fee Admin (${fee}%)`, value: admin },
-    { label: "Biaya Proses", value: biayaProses }
+    { label: "Biaya Proses", value: biayaProses },
+    { label: "Biaya Fix", value: biayaFix }
   ];
 
   if (enabledBiayaJasa) rincian.push({ label: "Biaya Jasa", value: biayaJasa });
@@ -1135,7 +1139,7 @@ export default function Page() {
   const [invoicePublicToken, setInvoicePublicToken] = useState("");
   const [invoiceDocType, setInvoiceDocType] = useState<InvoiceDocumentType>("faktur");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
-  const [invoiceValidUntil, setInvoiceValidUntil] = useState(new Date().toISOString().slice(0, 10));
+  const [invoiceValidUntil, setInvoiceValidUntil] = useState("");
   const [invoiceSalesPic, setInvoiceSalesPic] = useState("");
   const [invoiceBuyer, setInvoiceBuyer] = useState("");
   const [invoicePhone, setInvoicePhone] = useState("");
@@ -1977,7 +1981,7 @@ export default function Page() {
     setInvoiceNo("");
     setInvoicePublicToken("");
     setInvoiceDate(new Date().toISOString().slice(0, 10));
-    setInvoiceValidUntil(new Date().toISOString().slice(0, 10));
+    setInvoiceValidUntil("");
     setInvoiceSalesPic("");
     setInvoiceBuyer("");
     setInvoicePhone("");
@@ -2426,7 +2430,7 @@ export default function Page() {
               }
               <p><strong>Tanggal Cetak:</strong> ${printDate}</p>
               ${
-                invoiceDocType === "penawaran"
+                invoiceDocType === "penawaran" && invoiceValidUntil
                   ? `<p><strong>Berlaku Sampai:</strong> ${validUntilDate}</p>`
                   : ""
               }
@@ -2641,7 +2645,10 @@ export default function Page() {
       `Kurir: ${invoiceCourier || "-"}`,
       `Alamat: ${invoiceAddress || "-"}`,
       ...(invoiceDocType === "penawaran"
-        ? [`Berlaku sampai: ${validUntilDate}`, `PIC Sales: ${invoiceSalesPic || "-"}`]
+        ? [
+            ...(invoiceValidUntil ? [`Berlaku sampai: ${validUntilDate}`] : []),
+            `PIC Sales: ${invoiceSalesPic || "-"}`
+          ]
         : []),
       "",
       "*Rincian Barang:*",
@@ -2795,7 +2802,7 @@ export default function Page() {
       setInvoiceNo(detail.documentNo || "");
       setInvoicePublicToken(detail.publicToken || publicToken);
       setInvoiceDate(detail.invoiceDate || new Date().toISOString().slice(0, 10));
-      setInvoiceValidUntil(detail.validUntil || new Date().toISOString().slice(0, 10));
+      setInvoiceValidUntil(detail.validUntil || "");
       setInvoiceSalesPic(detail.salesPic || "");
       setInvoiceBuyer(detail.buyer || "");
       setInvoicePhone(detail.phone || "");
@@ -6552,7 +6559,18 @@ export default function Page() {
                 </label>
                 {invoiceDocType === "penawaran" ? (
                   <label className="grid gap-1.5 rounded-xl border border-sky-200 bg-sky-50/60 p-2.5 text-sm text-slate-600">
-                    <span>Masa Berlaku Penawaran</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span>Masa Berlaku Penawaran (opsional)</span>
+                      {invoiceValidUntil ? (
+                        <button
+                          type="button"
+                          onClick={() => setInvoiceValidUntil("")}
+                          className="rounded-lg border border-stone-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 transition hover:bg-stone-100"
+                        >
+                          Kosongkan
+                        </button>
+                      ) : null}
+                    </div>
                     <input
                       type="date"
                       value={invoiceValidUntil}

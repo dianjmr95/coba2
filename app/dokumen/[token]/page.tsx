@@ -419,7 +419,7 @@ export default async function DokumenPage({
             <p><strong>{docNoLabel}:</strong> {data.document_no}</p>
             {isPenawaran && salesPicValue ? <p><strong>PIC Sales:</strong> {salesPicValue}</p> : null}
             <p><strong>Tanggal Cetak:</strong> {formatDate(data.invoice_date)}</p>
-            {isPenawaran ? <p><strong>Berlaku Sampai:</strong> {formatDate(data.valid_until)}</p> : null}
+            {isPenawaran && data.valid_until ? <p><strong>Berlaku Sampai:</strong> {formatDate(data.valid_until)}</p> : null}
             {courierValue ? <p><strong>Kurir:</strong> {courierValue}</p> : null}
           </div>
           {hasBuyerBox ? (
