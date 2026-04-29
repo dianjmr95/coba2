@@ -132,6 +132,7 @@ export default async function DokumenPage({
     includeDiscountAmount?: string;
     includeDpPercent?: string;
     includeSJ?: string;
+    includeBAST?: string;
   }>;
 }) {
   const { token } = await params;
@@ -141,6 +142,7 @@ export default async function DokumenPage({
   const includeSignAndStamp = String(query?.includeSign || "1").trim() !== "0";
   const includeBankAccount = String(query?.includeBank || "").trim() === "1";
   const includeSuratJalan = String(query?.includeSJ || "1").trim() !== "0";
+  const includeBast = String(query?.includeBAST || "1").trim() !== "0";
   const includeTaxParamRaw = String(query?.includeTax || "").trim();
   const hasTaxOverride = includeTaxParamRaw === "1" || includeTaxParamRaw === "0";
   const includeTaxOverride = includeTaxParamRaw === "1";
@@ -349,6 +351,7 @@ export default async function DokumenPage({
   const salesPicValue = String(data.sales_pic || "").trim();
   const hasBuyerBox = Boolean(buyerValue || phoneValue || whatsappValue || addressValue);
   const suratJalanNo = `${data.document_no}/SJ`;
+  const bastNo = `${data.document_no}/BAST`;
 
   return (
     <main className="mx-auto min-h-screen max-w-4xl bg-white px-4 py-8 text-slate-900">
@@ -655,6 +658,89 @@ export default async function DokumenPage({
               </div>
               <div className="delivery-sign-box">
                 <div>Penerima,</div>
+                <div className="delivery-sign-space" />
+                <div><strong>(________________)</strong></div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {!isPenawaran && includeBast ? (
+          <div className="page-break">
+            <div className="header">
+              <div className="company">
+                <h1>STARCOMP SOLO</h1>
+                <p>Computer Store</p>
+                <p>Dokumen Serah Terima Barang</p>
+                <p className="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+                <p>No. Telp/WA: 08112642352</p>
+              </div>
+              <div className="logo-wrap">
+                <img src="/starcomp-logo.png" alt="Logo Starcomp" className="logo" />
+              </div>
+            </div>
+
+            <h2 className="title">BERITA ACARA SERAH TERIMA BARANG</h2>
+
+            <div className="meta">
+              <div className="box">
+                <p><strong>No BAST:</strong> {bastNo}</p>
+                <p><strong>Referensi Faktur:</strong> {data.document_no}</p>
+                <p><strong>Tanggal:</strong> {formatDate(data.invoice_date)}</p>
+                {courierValue ? <p><strong>Kurir:</strong> {courierValue}</p> : null}
+              </div>
+              <div className="box">
+                <p><strong>Diserahkan Kepada:</strong> {buyerValue || "-"}</p>
+                {phoneValue ? <p><strong>Telepon:</strong> {phoneValue}</p> : null}
+                <p><strong>Alamat:</strong> {addressValue || "-"}</p>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="doc-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 36 }}>No</th>
+                    <th>Nama Barang</th>
+                    <th className="right" style={{ width: 70 }}>Qty</th>
+                    <th style={{ width: 160 }}>Kondisi/Keterangan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.length ? (
+                    items.map((item, index) => (
+                      <tr key={`bast-${item.nama}-${index}`}>
+                        <td>{index + 1}</td>
+                        <td>{item.nama}</td>
+                        <td className="right">{item.qty}</td>
+                        <td>&nbsp;</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={4} className="text-center text-slate-500">
+                        Tidak ada item.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="notes">
+              <strong>Pernyataan:</strong> Barang telah diterima dalam kondisi baik dan sesuai. {cleanNotes || ""}
+            </div>
+
+            <div className="delivery-sign">
+              <div className="delivery-sign-box">
+                <div>Yang Menyerahkan,</div>
+                <div className={`delivery-sign-space ${includeSignAndStamp ? "" : "no-visual"}`}>
+                  {includeSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="delivery-stamp" /> : null}
+                  {includeSignAndStamp ? <img src="/signature-starcomp.png" alt="Tanda tangan" className="delivery-signature" /> : null}
+                </div>
+                <div><strong>STARCOMP SOLO</strong></div>
+              </div>
+              <div className="delivery-sign-box">
+                <div>Yang Menerima,</div>
                 <div className="delivery-sign-space" />
                 <div><strong>(________________)</strong></div>
               </div>

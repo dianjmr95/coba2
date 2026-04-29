@@ -1180,6 +1180,7 @@ export default function Page() {
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
   const [invoiceIncludeBankAccount, setInvoiceIncludeBankAccount] = useState(true);
   const [invoiceIncludeSuratJalan, setInvoiceIncludeSuratJalan] = useState(true);
+  const [invoiceIncludeBast, setInvoiceIncludeBast] = useState(true);
   const [invoiceAddress, setInvoiceAddress] = useState("");
   const [invoiceCourier, setInvoiceCourier] = useState("");
   const [invoiceNotes, setInvoiceNotes] = useState("");
@@ -2021,6 +2022,7 @@ export default function Page() {
     setInvoiceTaxMode("exclude");
     setInvoiceIncludeBankAccount(true);
     setInvoiceIncludeSuratJalan(true);
+    setInvoiceIncludeBast(true);
     setInvoiceCourier("");
     setInvoiceAddress("");
     setInvoiceNotes("");
@@ -2306,6 +2308,7 @@ export default function Page() {
                 <img class="signature" src="${signatureUrl}" alt="Tanda tangan" />`
       : "";
     const suratJalanNo = `${generatedInvoiceNo}/SJ`;
+    const bastNo = `${generatedInvoiceNo}/BAST`;
     const suratJalanRows = invoiceItems
       .map((item, idx) => {
         return `<tr>
@@ -2377,6 +2380,73 @@ export default function Page() {
             </div>
             <div class="delivery-sign-box">
               <div>Penerima,</div>
+              <div class="delivery-sign-space"></div>
+              <div><strong>(________________)</strong></div>
+            </div>
+          </div>
+        </div>`
+        : "";
+    const bastSection =
+      invoiceDocType === "faktur" && invoiceIncludeBast
+        ? `<div class="sheet page-break">
+          <div class="header">
+            <div class="company">
+              <h1>STARCOMP SOLO</h1>
+              <p>Computer Store</p>
+              <p>Dokumen Serah Terima Barang</p>
+              <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
+              <p>No. Telp/WA: 08112642352</p>
+            </div>
+            <div class="logo-wrap">
+              <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
+            </div>
+          </div>
+
+          <div class="title">BERITA ACARA SERAH TERIMA BARANG</div>
+
+          <div class="meta">
+            <div class="box">
+              <p><strong>No BAST:</strong> ${bastNo}</p>
+              <p><strong>Referensi Faktur:</strong> ${generatedInvoiceNo}</p>
+              <p><strong>Tanggal:</strong> ${printDate}</p>
+              ${courierValue ? `<p><strong>Kurir:</strong> ${courierValue}</p>` : ""}
+            </div>
+            <div class="box">
+              ${buyerValue ? `<p><strong>Diserahkan Kepada:</strong> ${buyerValue}</p>` : `<p><strong>Diserahkan Kepada:</strong> -</p>`}
+              ${phoneValue ? `<p><strong>Telepon:</strong> ${phoneValue}</p>` : ""}
+              ${addressValue ? `<p><strong>Alamat:</strong> ${addressValue}</p>` : `<p><strong>Alamat:</strong> -</p>`}
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width:36px;">No</th>
+                <th>Nama Barang</th>
+                <th class="right" style="width:70px;">Qty</th>
+                <th style="width:160px;">Kondisi/Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>${suratJalanRows}</tbody>
+          </table>
+
+          <div class="notes"><strong>Pernyataan:</strong> Barang telah diterima dalam kondisi baik dan sesuai. ${invoiceNotes || ""}</div>
+
+          <div class="delivery-sign">
+            <div class="delivery-sign-box">
+              <div>Yang Menyerahkan,</div>
+              <div class="delivery-sign-space ${invoiceIncludeSignAndStamp ? "" : "no-visual"}">
+                ${
+                  invoiceIncludeSignAndStamp
+                    ? `<img class="delivery-stamp" src="${logoUrl}" alt="Cap Starcomp" />
+                       <img class="delivery-signature" src="${signatureUrl}" alt="Tanda tangan" />`
+                    : ""
+                }
+              </div>
+              <div><strong>STARCOMP SOLO</strong></div>
+            </div>
+            <div class="delivery-sign-box">
+              <div>Yang Menerima,</div>
               <div class="delivery-sign-space"></div>
               <div><strong>(________________)</strong></div>
             </div>
@@ -2577,6 +2647,7 @@ export default function Page() {
           </div>
         </div>
         ${suratJalanSection}
+        ${bastSection}
 
         <script>
           (function () {
@@ -2621,7 +2692,8 @@ export default function Page() {
       includeTaxRate: String(invoiceTaxRate),
       includeTaxAmount: String(invoiceTaxAmount),
       includeDiscountAmount: String(invoiceDiscountValue),
-      includeSJ: invoiceIncludeSuratJalan ? "1" : "0"
+      includeSJ: invoiceIncludeSuratJalan ? "1" : "0",
+      includeBAST: invoiceIncludeBast ? "1" : "0"
     });
     return `${window.location.origin}/dokumen/${publicToken}?${params.toString()}`;
   }
@@ -2955,7 +3027,8 @@ export default function Page() {
       includeTaxAmount,
       includeDiscountAmount,
       includeDpPercent,
-      includeSJ: invoiceIncludeSuratJalan ? "1" : "0"
+      includeSJ: invoiceIncludeSuratJalan ? "1" : "0",
+      includeBAST: invoiceIncludeBast ? "1" : "0"
     });
     const url = `/dokumen/${publicToken}?${params.toString()}`;
     window.open(url, "_blank");
@@ -6823,6 +6896,17 @@ export default function Page() {
                       className="h-4 w-4 accent-stone-700"
                     />
                     <span>Cetak dengan Surat Jalan</span>
+                  </label>
+                ) : null}
+                {invoiceDocType === "faktur" ? (
+                  <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={invoiceIncludeBast}
+                      onChange={(e) => setInvoiceIncludeBast(e.target.checked)}
+                      className="h-4 w-4 accent-stone-700"
+                    />
+                    <span>Cetak dengan BAST</span>
                   </label>
                 ) : null}
                 </div>
