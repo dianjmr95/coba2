@@ -295,6 +295,201 @@ const DEFAULT_PRESET_DATA: PresetData = {
   mallAfiliasiPct: 2
 };
 
+const WHATSAPP_COUNTRY_CODES: Array<{ code: string; label: string }> = [
+  { code: "62", label: "Indonesia" },
+  { code: "1", label: "US / Canada" },
+  { code: "7", label: "Russia / Kazakhstan" },
+  { code: "20", label: "Egypt" },
+  { code: "27", label: "South Africa" },
+  { code: "30", label: "Greece" },
+  { code: "31", label: "Netherlands" },
+  { code: "32", label: "Belgium" },
+  { code: "33", label: "France" },
+  { code: "34", label: "Spain" },
+  { code: "36", label: "Hungary" },
+  { code: "39", label: "Italy" },
+  { code: "40", label: "Romania" },
+  { code: "41", label: "Switzerland" },
+  { code: "43", label: "Austria" },
+  { code: "44", label: "United Kingdom" },
+  { code: "45", label: "Denmark" },
+  { code: "46", label: "Sweden" },
+  { code: "47", label: "Norway" },
+  { code: "48", label: "Poland" },
+  { code: "49", label: "Germany" },
+  { code: "51", label: "Peru" },
+  { code: "52", label: "Mexico" },
+  { code: "53", label: "Cuba" },
+  { code: "54", label: "Argentina" },
+  { code: "55", label: "Brazil" },
+  { code: "56", label: "Chile" },
+  { code: "57", label: "Colombia" },
+  { code: "58", label: "Venezuela" },
+  { code: "60", label: "Malaysia" },
+  { code: "61", label: "Australia" },
+  { code: "63", label: "Philippines" },
+  { code: "64", label: "New Zealand" },
+  { code: "65", label: "Singapore" },
+  { code: "66", label: "Thailand" },
+  { code: "81", label: "Japan" },
+  { code: "82", label: "South Korea" },
+  { code: "84", label: "Vietnam" },
+  { code: "86", label: "China" },
+  { code: "90", label: "Turkey" },
+  { code: "91", label: "India" },
+  { code: "92", label: "Pakistan" },
+  { code: "93", label: "Afghanistan" },
+  { code: "94", label: "Sri Lanka" },
+  { code: "95", label: "Myanmar" },
+  { code: "98", label: "Iran" },
+  { code: "212", label: "Morocco" },
+  { code: "213", label: "Algeria" },
+  { code: "216", label: "Tunisia" },
+  { code: "218", label: "Libya" },
+  { code: "220", label: "Gambia" },
+  { code: "221", label: "Senegal" },
+  { code: "223", label: "Mali" },
+  { code: "224", label: "Guinea" },
+  { code: "225", label: "Ivory Coast" },
+  { code: "226", label: "Burkina Faso" },
+  { code: "227", label: "Niger" },
+  { code: "228", label: "Togo" },
+  { code: "229", label: "Benin" },
+  { code: "230", label: "Mauritius" },
+  { code: "231", label: "Liberia" },
+  { code: "232", label: "Sierra Leone" },
+  { code: "233", label: "Ghana" },
+  { code: "234", label: "Nigeria" },
+  { code: "235", label: "Chad" },
+  { code: "236", label: "Central African Republic" },
+  { code: "237", label: "Cameroon" },
+  { code: "238", label: "Cape Verde" },
+  { code: "239", label: "Sao Tome and Principe" },
+  { code: "240", label: "Equatorial Guinea" },
+  { code: "241", label: "Gabon" },
+  { code: "242", label: "Congo" },
+  { code: "243", label: "DR Congo" },
+  { code: "244", label: "Angola" },
+  { code: "248", label: "Seychelles" },
+  { code: "249", label: "Sudan" },
+  { code: "250", label: "Rwanda" },
+  { code: "251", label: "Ethiopia" },
+  { code: "252", label: "Somalia" },
+  { code: "254", label: "Kenya" },
+  { code: "255", label: "Tanzania" },
+  { code: "256", label: "Uganda" },
+  { code: "257", label: "Burundi" },
+  { code: "260", label: "Zambia" },
+  { code: "263", label: "Zimbabwe" },
+  { code: "264", label: "Namibia" },
+  { code: "265", label: "Malawi" },
+  { code: "266", label: "Lesotho" },
+  { code: "267", label: "Botswana" },
+  { code: "268", label: "Eswatini" },
+  { code: "269", label: "Comoros" },
+  { code: "297", label: "Aruba" },
+  { code: "298", label: "Faroe Islands" },
+  { code: "299", label: "Greenland" },
+  { code: "350", label: "Gibraltar" },
+  { code: "351", label: "Portugal" },
+  { code: "352", label: "Luxembourg" },
+  { code: "353", label: "Ireland" },
+  { code: "354", label: "Iceland" },
+  { code: "355", label: "Albania" },
+  { code: "356", label: "Malta" },
+  { code: "357", label: "Cyprus" },
+  { code: "358", label: "Finland" },
+  { code: "359", label: "Bulgaria" },
+  { code: "370", label: "Lithuania" },
+  { code: "371", label: "Latvia" },
+  { code: "372", label: "Estonia" },
+  { code: "373", label: "Moldova" },
+  { code: "374", label: "Armenia" },
+  { code: "375", label: "Belarus" },
+  { code: "376", label: "Andorra" },
+  { code: "377", label: "Monaco" },
+  { code: "378", label: "San Marino" },
+  { code: "380", label: "Ukraine" },
+  { code: "381", label: "Serbia" },
+  { code: "382", label: "Montenegro" },
+  { code: "385", label: "Croatia" },
+  { code: "386", label: "Slovenia" },
+  { code: "387", label: "Bosnia and Herzegovina" },
+  { code: "389", label: "North Macedonia" },
+  { code: "420", label: "Czech Republic" },
+  { code: "421", label: "Slovakia" },
+  { code: "423", label: "Liechtenstein" },
+  { code: "501", label: "Belize" },
+  { code: "502", label: "Guatemala" },
+  { code: "503", label: "El Salvador" },
+  { code: "504", label: "Honduras" },
+  { code: "505", label: "Nicaragua" },
+  { code: "506", label: "Costa Rica" },
+  { code: "507", label: "Panama" },
+  { code: "509", label: "Haiti" },
+  { code: "591", label: "Bolivia" },
+  { code: "592", label: "Guyana" },
+  { code: "593", label: "Ecuador" },
+  { code: "594", label: "French Guiana" },
+  { code: "595", label: "Paraguay" },
+  { code: "596", label: "Martinique" },
+  { code: "597", label: "Suriname" },
+  { code: "598", label: "Uruguay" },
+  { code: "599", label: "Curacao / Caribbean NL" },
+  { code: "670", label: "Timor-Leste" },
+  { code: "673", label: "Brunei" },
+  { code: "674", label: "Nauru" },
+  { code: "675", label: "Papua New Guinea" },
+  { code: "676", label: "Tonga" },
+  { code: "677", label: "Solomon Islands" },
+  { code: "678", label: "Vanuatu" },
+  { code: "679", label: "Fiji" },
+  { code: "680", label: "Palau" },
+  { code: "681", label: "Wallis and Futuna" },
+  { code: "682", label: "Cook Islands" },
+  { code: "683", label: "Niue" },
+  { code: "685", label: "Samoa" },
+  { code: "686", label: "Kiribati" },
+  { code: "687", label: "New Caledonia" },
+  { code: "688", label: "Tuvalu" },
+  { code: "689", label: "French Polynesia" },
+  { code: "691", label: "Micronesia" },
+  { code: "692", label: "Marshall Islands" },
+  { code: "850", label: "North Korea" },
+  { code: "852", label: "Hong Kong" },
+  { code: "853", label: "Macau" },
+  { code: "855", label: "Cambodia" },
+  { code: "856", label: "Laos" },
+  { code: "880", label: "Bangladesh" },
+  { code: "886", label: "Taiwan" },
+  { code: "960", label: "Maldives" },
+  { code: "961", label: "Lebanon" },
+  { code: "962", label: "Jordan" },
+  { code: "963", label: "Syria" },
+  { code: "964", label: "Iraq" },
+  { code: "965", label: "Kuwait" },
+  { code: "966", label: "Saudi Arabia" },
+  { code: "967", label: "Yemen" },
+  { code: "968", label: "Oman" },
+  { code: "970", label: "Palestine" },
+  { code: "971", label: "United Arab Emirates" },
+  { code: "972", label: "Israel" },
+  { code: "973", label: "Bahrain" },
+  { code: "974", label: "Qatar" },
+  { code: "975", label: "Bhutan" },
+  { code: "976", label: "Mongolia" },
+  { code: "977", label: "Nepal" },
+  { code: "992", label: "Tajikistan" },
+  { code: "993", label: "Turkmenistan" },
+  { code: "994", label: "Azerbaijan" },
+  { code: "995", label: "Georgia" },
+  { code: "996", label: "Kyrgyzstan" },
+  { code: "998", label: "Uzbekistan" }
+];
+const WHATSAPP_COUNTRY_CODES_SORTED = [...WHATSAPP_COUNTRY_CODES].sort(
+  (a, b) => b.code.length - a.code.length
+);
+
 const rupiah = (num: number) => `Rp ${Math.round(num).toLocaleString("id-ID")}`;
 const rupiahOrDash = (num: number) => (Number.isFinite(num) ? rupiah(num) : "-");
 const cap = (value: number, max: number) => Math.min(value, max);
@@ -1171,7 +1366,9 @@ export default function Page() {
   const [invoiceValidUntil, setInvoiceValidUntil] = useState("");
   const [invoiceSalesPic, setInvoiceSalesPic] = useState("");
   const [invoiceBuyer, setInvoiceBuyer] = useState("");
-  const [invoicePhone, setInvoicePhone] = useState("");
+  const [invoiceWhatsappCountryCode, setInvoiceWhatsappCountryCode] = useState("62");
+  const [invoiceWhatsappCountrySearch, setInvoiceWhatsappCountrySearch] = useState("");
+  const [invoiceWhatsappLocalNumber, setInvoiceWhatsappLocalNumber] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
   const [invoiceDiscountAmount, setInvoiceDiscountAmount] = useState(0);
   const [invoiceDownPaymentPercent, setInvoiceDownPaymentPercent] = useState(0);
@@ -1179,6 +1376,7 @@ export default function Page() {
   const [invoiceTaxMode, setInvoiceTaxMode] = useState<InvoiceTaxMode>("exclude");
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
   const [invoiceIncludeBankAccount, setInvoiceIncludeBankAccount] = useState(true);
+  const [invoiceDotMatrixMode, setInvoiceDotMatrixMode] = useState(false);
   const [invoiceIncludeSuratJalan, setInvoiceIncludeSuratJalan] = useState(true);
   const [invoiceIncludeBast, setInvoiceIncludeBast] = useState(true);
   const [invoiceAddress, setInvoiceAddress] = useState("");
@@ -2014,7 +2212,9 @@ export default function Page() {
     setInvoiceValidUntil("");
     setInvoiceSalesPic("");
     setInvoiceBuyer("");
-    setInvoicePhone("");
+    setInvoiceWhatsappCountryCode("62");
+    setInvoiceWhatsappCountrySearch("");
+    setInvoiceWhatsappLocalNumber("");
     setInvoiceWhatsapp("");
     setInvoiceDiscountAmount(0);
     setInvoiceDownPaymentPercent(0);
@@ -2095,9 +2295,9 @@ export default function Page() {
   const invoiceHasCoreInfo = useMemo(() => {
     const hasDate = Boolean(String(invoiceDate || "").trim());
     const hasBuyer = Boolean(String(invoiceBuyer || "").trim());
-    const hasContact = Boolean(String(invoicePhone || "").trim() || String(invoiceWhatsapp || "").trim());
+    const hasContact = Boolean(String(invoiceWhatsapp || "").trim());
     return hasDate && hasBuyer && hasContact;
-  }, [invoiceBuyer, invoiceDate, invoicePhone, invoiceWhatsapp]);
+  }, [invoiceBuyer, invoiceDate, invoiceWhatsapp]);
   const invoiceHasItems = useMemo(
     () => invoiceItems.some((item) => item.nama.trim() && item.qty > 0 && item.harga >= 0),
     [invoiceItems]
@@ -2108,6 +2308,18 @@ export default function Page() {
     [invoiceCanFinalize, invoiceHasCoreInfo, invoiceHasItems]
   );
   const invoiceStepProgressPct = useMemo(() => Math.round((invoiceStepDoneCount / 3) * 100), [invoiceStepDoneCount]);
+  const filteredWhatsappCountryCodes = useMemo(() => {
+    const needle = invoiceWhatsappCountrySearch.trim().toLowerCase();
+    if (!needle) return WHATSAPP_COUNTRY_CODES;
+    return WHATSAPP_COUNTRY_CODES.filter((entry) => {
+      const codeText = `+${entry.code}`;
+      return (
+        entry.label.toLowerCase().includes(needle) ||
+        entry.code.includes(needle) ||
+        codeText.includes(needle)
+      );
+    });
+  }, [invoiceWhatsappCountrySearch]);
 
   useEffect(() => {
     setInvoiceDiscountAmount((prev) => Math.min(Math.max(0, Number(prev) || 0), Math.max(0, Math.round(invoiceSubtotal))));
@@ -2203,7 +2415,7 @@ export default function Page() {
           invoiceDate,
           validUntil: invoiceDocType === "penawaran" ? invoiceValidUntil || null : null,
           buyer: invoiceBuyer,
-          phone: invoicePhone,
+          phone: invoiceWhatsapp,
           whatsapp: invoiceWhatsapp,
           address: invoiceAddress,
           courier: invoiceCourier,
@@ -2255,443 +2467,88 @@ export default function Page() {
       return;
     }
 
-    const generatedInvoiceNo = savedDoc.documentNo;
-
-    const rows = invoiceItems
-      .map((item, idx) => {
-        const line = Math.max(0, item.qty) * Math.max(0, item.harga);
-        return `<tr>
-          <td style="padding:8px;border:1px solid #ddd;">${idx + 1}</td>
-          <td style="padding:8px;border:1px solid #ddd;">${item.nama || "-"}</td>
-          <td style="padding:8px;border:1px solid #ddd;text-align:right;">${item.qty}</td>
-          <td style="padding:8px;border:1px solid #ddd;text-align:right;">${rupiah(item.harga)}</td>
-          <td style="padding:8px;border:1px solid #ddd;text-align:right;">${rupiah(line)}</td>
-        </tr>`;
-      })
-      .join("");
-
-    const logoUrl = `${window.location.origin}/starcomp-logo.png`;
-    const signatureUrl = `${window.location.origin}/signature-starcomp.png`;
-    const buyerValue = invoiceBuyer.trim();
-    const phoneValue = invoicePhone.trim();
-    const whatsappValue = invoiceWhatsapp.trim();
-    const addressValue = invoiceAddress.trim();
-    const courierValue = invoiceCourier.trim();
-    const salesPicValue = invoiceSalesPic.trim();
-    const bankAccountValue = DEFAULT_BANK_ACCOUNT_INFO.trim();
-    const showBankAccount = invoiceIncludeBankAccount && Boolean(bankAccountValue);
-    const bankAccountHtml = bankAccountValue.replace(/\n/g, "<br />");
-    const printDate = new Intl.DateTimeFormat("id-ID", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric"
-    }).format(new Date());
-    const validUntilDate = invoiceValidUntil
-      ? new Intl.DateTimeFormat("id-ID", {
-          day: "2-digit",
-          month: "2-digit",
-          year: "numeric"
-        }).format(new Date(invoiceValidUntil))
-      : "-";
-
-    const docLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
-    const docNoLabel = invoiceDocType === "faktur" ? "No Faktur" : "No Penawaran";
-    const totalLabel = invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN";
-    const taxRateLabel = invoiceTaxRate.toFixed(2).replace(".", ",");
-    const taxTermsLine =
-      invoiceTaxMode === "include"
-        ? "* Harga diatas sudah termasuk Faktur Pajak."
-        : "* Harga diatas belum termasuk Faktur Pajak (PPN ditambahkan terpisah).";
-    const hasBuyerBox = Boolean(buyerValue || phoneValue || whatsappValue || addressValue);
-    const signVisuals = invoiceIncludeSignAndStamp
-      ? `<img class="stamp" src="${logoUrl}" alt="Cap Starcomp" />
-                <img class="signature" src="${signatureUrl}" alt="Tanda tangan" />`
-      : "";
-    const suratJalanNo = `${generatedInvoiceNo}/SJ`;
-    const bastNo = `${generatedInvoiceNo}/BAST`;
-    const suratJalanRows = invoiceItems
-      .map((item, idx) => {
-        return `<tr>
-          <td style="padding:8px;border:1px solid #ddd;">${idx + 1}</td>
-          <td style="padding:8px;border:1px solid #ddd;">${item.nama || "-"}</td>
-          <td style="padding:8px;border:1px solid #ddd;text-align:right;">${item.qty}</td>
-          <td style="padding:8px;border:1px solid #ddd;">&nbsp;</td>
-        </tr>`;
-      })
-      .join("");
-    const suratJalanSection =
-      invoiceDocType === "faktur" && invoiceIncludeSuratJalan
-        ? `<div class="sheet page-break">
-          <div class="header">
-            <div class="company">
-              <h1>STARCOMP SOLO</h1>
-              <p>Computer Store</p>
-              <p>Dokumen Pengiriman Barang</p>
-              <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
-              <p>No. Telp/WA: 08112642352</p>
-            </div>
-            <div class="logo-wrap">
-              <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
-            </div>
-          </div>
-
-          <div class="title">SURAT JALAN</div>
-
-          <div class="meta">
-            <div class="box">
-              <p><strong>No Surat Jalan:</strong> ${suratJalanNo}</p>
-              <p><strong>Referensi Faktur:</strong> ${generatedInvoiceNo}</p>
-              <p><strong>Tanggal:</strong> ${printDate}</p>
-              ${courierValue ? `<p><strong>Kurir:</strong> ${courierValue}</p>` : ""}
-            </div>
-            <div class="box">
-              ${buyerValue ? `<p><strong>Dikirim Kepada:</strong> ${buyerValue}</p>` : `<p><strong>Dikirim Kepada:</strong> -</p>`}
-              ${phoneValue ? `<p><strong>Telepon:</strong> ${phoneValue}</p>` : ""}
-              ${addressValue ? `<p><strong>Alamat:</strong> ${addressValue}</p>` : `<p><strong>Alamat:</strong> -</p>`}
-            </div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width:36px;">No</th>
-                <th>Nama Barang</th>
-                <th class="right" style="width:70px;">Qty</th>
-                <th style="width:160px;">Keterangan</th>
-              </tr>
-            </thead>
-            <tbody>${suratJalanRows}</tbody>
-          </table>
-
-          <div class="notes"><strong>Catatan Pengiriman:</strong> ${invoiceNotes || "-"}</div>
-
-          <div class="delivery-sign">
-            <div class="delivery-sign-box">
-              <div>Pengirim,</div>
-              <div class="delivery-sign-space ${invoiceIncludeSignAndStamp ? "" : "no-visual"}">
-                ${
-                  invoiceIncludeSignAndStamp
-                    ? `<img class="delivery-stamp" src="${logoUrl}" alt="Cap Starcomp" />
-                       <img class="delivery-signature" src="${signatureUrl}" alt="Tanda tangan" />`
-                    : ""
-                }
-              </div>
-              <div><strong>STARCOMP SOLO</strong></div>
-            </div>
-            <div class="delivery-sign-box">
-              <div>Penerima,</div>
-              <div class="delivery-sign-space"></div>
-              <div><strong>(________________)</strong></div>
-            </div>
-          </div>
-        </div>`
-        : "";
-    const bastSection =
-      invoiceDocType === "faktur" && invoiceIncludeBast
-        ? `<div class="sheet page-break">
-          <div class="header">
-            <div class="company">
-              <h1>STARCOMP SOLO</h1>
-              <p>Computer Store</p>
-              <p>Dokumen Serah Terima Barang</p>
-              <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
-              <p>No. Telp/WA: 08112642352</p>
-            </div>
-            <div class="logo-wrap">
-              <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
-            </div>
-          </div>
-
-          <div class="title">BERITA ACARA SERAH TERIMA BARANG</div>
-
-          <div class="meta">
-            <div class="box">
-              <p><strong>No BAST:</strong> ${bastNo}</p>
-              <p><strong>Referensi Faktur:</strong> ${generatedInvoiceNo}</p>
-              <p><strong>Tanggal:</strong> ${printDate}</p>
-              ${courierValue ? `<p><strong>Kurir:</strong> ${courierValue}</p>` : ""}
-            </div>
-            <div class="box">
-              ${buyerValue ? `<p><strong>Diserahkan Kepada:</strong> ${buyerValue}</p>` : `<p><strong>Diserahkan Kepada:</strong> -</p>`}
-              ${phoneValue ? `<p><strong>Telepon:</strong> ${phoneValue}</p>` : ""}
-              ${addressValue ? `<p><strong>Alamat:</strong> ${addressValue}</p>` : `<p><strong>Alamat:</strong> -</p>`}
-            </div>
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width:36px;">No</th>
-                <th>Nama Barang</th>
-                <th class="right" style="width:70px;">Qty</th>
-                <th style="width:160px;">Kondisi/Keterangan</th>
-              </tr>
-            </thead>
-            <tbody>${suratJalanRows}</tbody>
-          </table>
-
-          <div class="notes"><strong>Pernyataan:</strong> Barang telah diterima dalam kondisi baik dan sesuai. ${invoiceNotes || ""}</div>
-
-          <div class="delivery-sign">
-            <div class="delivery-sign-box">
-              <div>Yang Menyerahkan,</div>
-              <div class="delivery-sign-space ${invoiceIncludeSignAndStamp ? "" : "no-visual"}">
-                ${
-                  invoiceIncludeSignAndStamp
-                    ? `<img class="delivery-stamp" src="${logoUrl}" alt="Cap Starcomp" />
-                       <img class="delivery-signature" src="${signatureUrl}" alt="Tanda tangan" />`
-                    : ""
-                }
-              </div>
-              <div><strong>STARCOMP SOLO</strong></div>
-            </div>
-            <div class="delivery-sign-box">
-              <div>Yang Menerima,</div>
-              <div class="delivery-sign-space"></div>
-              <div><strong>(________________)</strong></div>
-            </div>
-          </div>
-        </div>`
-        : "";
-    const html = `<!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>${docLabel} ${generatedInvoiceNo}</title>
-        <style>
-          @page { size: A4; margin: 12mm; }
-          body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 11px; }
-          .sheet { max-width: 760px; margin: 0 auto; }
-          .header { display: flex; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
-          .company { width: 50%; padding-right: 8px; }
-          .logo-wrap { width: 50%; display: flex; justify-content: flex-end; }
-          .logo { width: 220px; max-width: 100%; height: auto; object-fit: contain; }
-          .company h1 { margin: 0; font-size: 28px; letter-spacing: 0.015em; line-height: 1.02; }
-          .company p { margin: 1px 0 0; color: #222; font-size: 10px; line-height: 1.25; }
-          .company .address { margin-top: 2px; font-size: 9px; line-height: 1.3; max-width: 500px; color: #333; }
-          .title { margin: 10px 0 8px; text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 0.11em; }
-          .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
-          .meta.single { grid-template-columns: 1fr; }
-          .box { border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 68px; }
-          .box p { margin: 0 0 3px; font-size: 10px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 4px; }
-          th, td { border: 1px solid #999; padding: 5px; font-size: 10px; }
-          th { background: #f2f2f2; font-weight: 700; }
-          td.right, th.right { text-align: right; }
-          .total { margin-top: 8px; display: flex; justify-content: flex-end; font-size: 14px; font-weight: 700; }
-          .notes { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 42px; font-size: 10px; }
-          .terms { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.5; }
-          .terms-title { font-weight: 700; margin-bottom: 4px; }
-          .terms-list { margin: 0; padding-left: 16px; }
-          .terms-closing { margin-top: 8px; }
-          .bank-section { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.45; }
-          .bank-box { margin-top: 8px; border-top: 1px dashed #bbb; padding-top: 6px; line-height: 1.45; }
-          .bank-label { font-weight: 700; }
-          .sign { margin-top: 30px; display: flex; justify-content: flex-end; }
-          .sign-box { width: 180px; text-align: center; font-size: 10px; position: relative; }
-          .sign-space { height: 74px; position: relative; }
-          .sign-space.no-visual { height: 74px; }
-          .stamp { position: absolute; left: 50%; top: 2px; width: 132px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
-          .signature { position: absolute; left: 50%; top: 17px; width: 106px; transform: translateX(-50%); z-index: 1; }
-          .page-break { break-before: page; page-break-before: always; }
-          .delivery-sign { margin-top: 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
-          .delivery-sign-box { text-align: center; font-size: 10px; }
-          .delivery-sign-space { height: 82px; position: relative; }
-          .delivery-sign-space.no-visual { height: 82px; }
-          .delivery-stamp { position: absolute; left: 50%; top: 6px; width: 126px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
-          .delivery-signature { position: absolute; left: 50%; top: 22px; width: 102px; transform: translateX(-50%); z-index: 1; }
-        </style>
-      </head>
-      <body>
-        <div class="sheet">
-          <div class="header">
-            <div class="company">
-              <h1>STARCOMP SOLO</h1>
-              <p>Computer Store</p>
-              <p>${invoiceDocType === "faktur" ? "Faktur Penjualan Resmi" : "Dokumen Penawaran Barang"}</p>
-              <p class="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
-              <p>No. Telp/WA: 08112642352</p>
-            </div>
-            <div class="logo-wrap">
-              <img class="logo" src="${logoUrl}" alt="Logo Starcomp" />
-            </div>
-          </div>
-
-          <div class="title">${invoiceDocUpperLabel}</div>
-
-          <div class="meta${hasBuyerBox ? "" : " single"}">
-            <div class="box">
-              <p><strong>${docNoLabel}:</strong> ${generatedInvoiceNo}</p>
-              ${
-                invoiceDocType === "penawaran" && salesPicValue
-                  ? `<p><strong>PIC Sales:</strong> ${salesPicValue}</p>`
-                  : ""
-              }
-              <p><strong>Tanggal Cetak:</strong> ${printDate}</p>
-              ${
-                invoiceDocType === "penawaran" && invoiceValidUntil
-                  ? `<p><strong>Berlaku Sampai:</strong> ${validUntilDate}</p>`
-                  : ""
-              }
-              ${courierValue ? `<p><strong>Kurir:</strong> ${courierValue}</p>` : ""}
-            </div>
-            ${
-              hasBuyerBox
-                ? `<div class="box">
-              ${buyerValue ? `<p><strong>Pembeli:</strong> ${buyerValue}</p>` : ""}
-              ${phoneValue ? `<p><strong>Telepon:</strong> ${phoneValue}</p>` : ""}
-              ${whatsappValue ? `<p><strong>WhatsApp:</strong> ${whatsappValue}</p>` : ""}
-              ${addressValue ? `<p><strong>Alamat:</strong> ${addressValue}</p>` : ""}
-            </div>`
-                : ""
-            }
-          </div>
-
-          <table>
-            <thead>
-              <tr>
-                <th style="width:36px;">No</th>
-                <th>Nama Barang</th>
-                <th class="right" style="width:56px;">Qty</th>
-                <th class="right" style="width:130px;">Harga Satuan</th>
-                <th class="right" style="width:138px;">Jumlah</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-
-          ${
-            invoiceTaxEnabled
-              ? `<div style="margin-top:8px;display:grid;gap:3px;font-size:10px;">
-                  ${
-                    invoiceDiscountValue > 0
-                      ? `<div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal Barang</span><strong>${rupiah(invoiceSubtotal)}</strong></div>
-                         <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Diskon</span><strong>-${rupiah(invoiceDiscountValue)}</strong></div>`
-                      : ""
-                  }
-                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>${invoiceSubtotalLabel}</span><strong>${rupiah(invoiceDisplaySubtotal)}</strong></div>
-                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>PPN (${taxRateLabel}%)</span><strong>${rupiah(invoiceTaxAmount)}</strong></div>
-                </div>`
-              : invoiceDiscountValue > 0
-                ? `<div style="margin-top:8px;display:grid;gap:3px;font-size:10px;">
-                    <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal Barang</span><strong>${rupiah(invoiceSubtotal)}</strong></div>
-                    <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Diskon</span><strong>-${rupiah(invoiceDiscountValue)}</strong></div>
-                    <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Subtotal</span><strong>${rupiah(invoiceSubtotalAfterDiscount)}</strong></div>
-                  </div>`
-                : ""
-          }
-          <div class="total">${totalLabel}: ${rupiah(invoiceGrandTotal)}</div>
-          ${
-            isFakturDocContext && invoiceDownPaymentPercentValue > 0
-              ? `<div style="margin-top:4px;display:grid;gap:3px;font-size:10px;">
-                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>DP Dibayar (${invoiceDownPaymentPercentValue.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%)</span><strong>${rupiah(invoiceDownPaymentAmount)}</strong></div>
-                  <div style="display:flex;justify-content:flex-end;gap:8px;"><span>Sisa Tagihan</span><strong>${rupiah(invoiceRemainingAmount)}</strong></div>
-                </div>`
-              : ""
-          }
-          <div class="notes"><strong>Catatan:</strong> ${invoiceNotes || "-"}</div>
-          ${
-            showBankAccount && invoiceDocType === "faktur"
-              ? `<div class="bank-section"><div class="bank-label">Rekening Pembayaran:</div><div>${bankAccountHtml}</div></div>`
-              : ""
-          }
-          ${
-            invoiceDocType === "faktur"
-              ? `<div class="terms">
-                  <div class="terms-title">KETERANGAN :</div>
-                  <div>* Barang yang sudah dibeli tidak bisa dikembalikan.</div>
-                  <div>* Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</div>
-                  ${
-                    invoiceTaxEnabled
-                      ? `<div>${taxTermsLine}</div>`
-                      : ""
-                  }
-                  <div>* Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</div>
-                  <div class="terms-closing">Terima kasih atas kepercayaan Anda.</div>
-                </div>`
-              : ""
-          }
-          ${
-            invoiceDocType === "penawaran"
-              ? `<div class="terms">
-                <div class="terms-title">Syarat dan Ketentuan:</div>
-                <ol class="terms-list">
-                    ${
-                      invoiceTaxEnabled
-                        ? `<li>${taxTermsLine.replace("* ", "")}</li>`
-                        : ""
-                    }
-                    <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
-                    <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
-                    <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>
-                    <li>Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</li>
-                    <li>Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</li>
-                  </ol>
-                  ${
-                    showBankAccount
-                      ? `<div class="bank-box"><span class="bank-label">Rekening Pembayaran:</span><br />${bankAccountHtml}</div>`
-                      : ""
-                  }
-                  <div class="terms-closing">Demikian surat penawaran ini kami sampaikan. Atas perhatian dan kerjasamanya, kami ucapkan terima kasih.</div>
-                </div>`
-              : ""
-          }
-          <div class="sign">
-            <div class="sign-box">
-              <div>Hormat kami,</div>
-              <div class="sign-space ${invoiceIncludeSignAndStamp ? "" : "no-visual"}">
-                ${signVisuals}
-              </div>
-              <div><strong>STARCOMP SOLO</strong></div>
-            </div>
-          </div>
-        </div>
-        ${suratJalanSection}
-        ${bastSection}
-
-        <script>
-          (function () {
-            const images = Array.from(document.images || []);
-            const waitImages = images.map((img) => {
-              if (img.complete) return Promise.resolve();
-              return new Promise((resolve) => {
-                img.addEventListener("load", resolve, { once: true });
-                img.addEventListener("error", resolve, { once: true });
-              });
-            });
-
-            Promise.all(waitImages).finally(() => {
-              setTimeout(() => window.print(), 120);
-            });
-          })();
-        <\/script>
-      </body>
-    </html>`;
-
-    const w = window.open("", "_blank", "width=900,height=700");
-    if (!w) return;
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
+    const params = new URLSearchParams({
+      autoprint: "1",
+      includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
+      includeBank: invoiceIncludeBankAccount ? "1" : "0",
+      includeDot: invoiceDotMatrixMode ? "1" : "0",
+      includeTax: invoiceTaxEnabled ? "1" : "0",
+      includeTaxMode: invoiceTaxMode,
+      includeTaxRate: String(invoiceTaxRate),
+      includeTaxAmount: String(invoiceTaxEnabled ? invoiceTaxAmount : 0),
+      includeDiscountAmount: String(invoiceDiscountValue),
+      includeDpPercent: String(isFakturDocContext ? invoiceDownPaymentPercentValue : 0),
+      includeSJ: invoiceIncludeSuratJalan ? "1" : "0",
+      includeBAST: invoiceIncludeBast ? "1" : "0"
+    });
+    window.open(`/dokumen/${savedDoc.publicToken}?${params.toString()}`, "_blank");
   }
 
   function normalizeWhatsappNumber(input: string) {
-    const digits = input.replace(/\D/g, "");
-    if (!digits) return "";
-    if (digits.startsWith("62")) return digits;
-    if (digits.startsWith("0")) return `62${digits.slice(1)}`;
-    return digits;
+    const raw = String(input || "").trim();
+    if (!raw) return "";
+
+    // WhatsApp wa.me expects digits in international format (no "+" sign).
+    const startsWithPlus = raw.startsWith("+");
+    let normalized = raw.replace(/[^\d+]/g, "");
+    if (startsWithPlus) {
+      normalized = normalized.replace(/\+/g, "");
+    } else {
+      normalized = normalized.replace(/\D/g, "");
+    }
+
+    if (normalized.startsWith("00")) {
+      normalized = normalized.slice(2);
+    }
+
+    return normalized;
+  }
+
+  function splitWhatsappNumber(input: string) {
+    const digits = normalizeWhatsappNumber(input);
+    if (!digits) {
+      return { countryCode: "62", localNumber: "" };
+    }
+    const match = WHATSAPP_COUNTRY_CODES_SORTED.find((entry) => digits.startsWith(entry.code));
+    if (match) {
+      return {
+        countryCode: match.code,
+        localNumber: digits.slice(match.code.length)
+      };
+    }
+    if (digits.startsWith("0")) {
+      return { countryCode: "62", localNumber: digits.slice(1) };
+    }
+    return { countryCode: "62", localNumber: digits };
+  }
+
+  function buildWhatsappNumber(countryCode: string, localNumber: string) {
+    const code = String(countryCode || "").replace(/\D/g, "");
+    const local = String(localNumber || "").replace(/\D/g, "").replace(/^0+/, "");
+    if (!local) return "";
+    if (!code) return local;
+    return `${code}${local}`;
+  }
+
+  function applyWhatsappFromParts(countryCode: string, localNumber: string) {
+    const code = String(countryCode || "").replace(/\D/g, "");
+    const local = String(localNumber || "").replace(/\D/g, "");
+    setInvoiceWhatsappCountryCode(code || "62");
+    setInvoiceWhatsappLocalNumber(local);
+    setInvoiceWhatsapp(buildWhatsappNumber(code || "62", local));
   }
 
   function getDocumentShareUrl(publicToken: string) {
     const params = new URLSearchParams({
       includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
       includeBank: invoiceIncludeBankAccount ? "1" : "0",
+      includeDot: invoiceDotMatrixMode ? "1" : "0",
       includeTax: invoiceTaxEnabled ? "1" : "0",
       includeTaxMode: invoiceTaxMode,
       includeTaxRate: String(invoiceTaxRate),
       includeTaxAmount: String(invoiceTaxAmount),
       includeDiscountAmount: String(invoiceDiscountValue),
+      includeDpPercent: String(isFakturDocContext ? invoiceDownPaymentPercentValue : 0),
       includeSJ: invoiceIncludeSuratJalan ? "1" : "0",
       includeBAST: invoiceIncludeBast ? "1" : "0"
     });
@@ -2699,9 +2556,9 @@ export default function Page() {
   }
 
   async function sendInvoiceToWhatsapp() {
-    const target = normalizeWhatsappNumber(invoiceWhatsapp || invoicePhone);
+    const target = normalizeWhatsappNumber(invoiceWhatsapp);
     if (!target) {
-      window.alert("Isi No WhatsApp tujuan terlebih dahulu.");
+      window.alert("Isi No WhatsApp Pembeli terlebih dahulu.");
       return;
     }
 
@@ -2729,31 +2586,42 @@ export default function Page() {
         }).format(new Date(invoiceValidUntil))
       : "-";
 
-    const lines = invoiceItems.map((item, idx) => {
-      const qty = Math.max(0, item.qty);
-      const harga = Math.max(0, item.harga);
-      const total = qty * harga;
-      return `${idx + 1}. ${item.nama || "-"} x${qty} = ${rupiah(total)}`;
-    });
+    const lines = invoiceItems
+      .map((item) => ({
+        nama: String(item.nama || "").trim(),
+        qty: Math.max(0, item.qty),
+        harga: Math.max(0, item.harga)
+      }))
+      .filter((item) => item.nama && item.qty > 0)
+      .map((item, idx) => {
+        const total = item.qty * item.harga;
+        return `${idx + 1}. ${item.nama} x${item.qty} = ${rupiah(total)}`;
+      });
 
     const docLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
+    const contactLines = [
+      invoiceBuyer ? `Pembeli: ${invoiceBuyer}` : "",
+      invoiceWhatsapp ? `WhatsApp: ${invoiceWhatsapp}` : "",
+      invoiceCourier ? `Kurir: ${invoiceCourier}` : "",
+      invoiceAddress ? `Alamat: ${invoiceAddress}` : ""
+    ].filter(Boolean);
+    const penawaranLines =
+      invoiceDocType === "penawaran"
+        ? [
+            ...(invoiceValidUntil ? [`Berlaku sampai: ${validUntilDate}`] : []),
+            ...(invoiceSalesPic ? [`PIC Sales: ${invoiceSalesPic}`] : [])
+          ]
+        : [];
+    const totalLabel = invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN";
+
     const text = [
       `*${invoiceDocUpperLabel} STARCOMP SOLO*`,
       `No ${docLabel}: ${draftNo}`,
       `Tanggal: ${printDate}`,
-      `Pembeli: ${invoiceBuyer || "-"}`,
-      `Telepon: ${invoicePhone || "-"}`,
-      `Kurir: ${invoiceCourier || "-"}`,
-      `Alamat: ${invoiceAddress || "-"}`,
-      ...(invoiceDocType === "penawaran"
-        ? [
-            ...(invoiceValidUntil ? [`Berlaku sampai: ${validUntilDate}`] : []),
-            `PIC Sales: ${invoiceSalesPic || "-"}`
-          ]
-        : []),
+      ...contactLines,
+      ...penawaranLines,
       "",
-      "*Rincian Barang:*",
-      ...lines,
+      ...(lines.length ? ["*Rincian Barang:*", ...lines] : []),
       "",
       ...(invoiceTaxEnabled
         ? [
@@ -2771,16 +2639,18 @@ export default function Page() {
               `Subtotal: ${rupiah(invoiceSubtotalAfterDiscount)}`
             ]
           : []),
-      `*${invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN"}: ${rupiah(invoiceGrandTotal)}*`,
+      `*${totalLabel}: ${rupiah(invoiceGrandTotal)}*`,
       ...(isFakturDocContext && invoiceDownPaymentPercentValue > 0
         ? [
             `DP Dibayar (${invoiceDownPaymentPercentValue.toLocaleString("id-ID", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}%): ${rupiah(invoiceDownPaymentAmount)}`,
             `Sisa Tagihan: ${rupiah(invoiceRemainingAmount)}`
           ]
         : []),
-      `Catatan: ${invoiceNotes || "-"}`,
+      ...(invoiceNotes ? [`Catatan: ${invoiceNotes}`] : []),
       `Link dokumen: ${getDocumentShareUrl(savedDoc.publicToken)}`
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     const url = `https://wa.me/${target}?text=${encodeURIComponent(text)}`;
     window.open(url, "_blank");
@@ -2906,8 +2776,11 @@ export default function Page() {
       setInvoiceValidUntil(detail.validUntil || "");
       setInvoiceSalesPic(detail.salesPic || "");
       setInvoiceBuyer(detail.buyer || "");
-      setInvoicePhone(detail.phone || "");
-      setInvoiceWhatsapp(detail.whatsapp || detail.phone || "");
+      const savedWhatsapp = detail.whatsapp || detail.phone || "";
+      const parsedWhatsapp = splitWhatsappNumber(savedWhatsapp);
+      setInvoiceWhatsappCountryCode(parsedWhatsapp.countryCode);
+      setInvoiceWhatsappLocalNumber(parsedWhatsapp.localNumber);
+      setInvoiceWhatsapp(buildWhatsappNumber(parsedWhatsapp.countryCode, parsedWhatsapp.localNumber));
       setInvoiceAddress(detail.address || "");
       setInvoiceCourier(detail.courier || "");
       setInvoiceNotes(detail.notes || "");
@@ -3009,7 +2882,7 @@ export default function Page() {
             detailTaxMode === "include"
               ? Math.max(0, subtotalAfterDiscount - Math.round((subtotalAfterDiscount * 100) / (100 + detailTaxRate)))
               : Math.max(0, Math.round((subtotalAfterDiscount * detailTaxRate) / 100));
-          includeTaxAmount = String(computedTax);
+          includeTaxAmount = String(detailTaxAmount > 0 ? detailTaxAmount : computedTax);
         } else {
           includeTaxAmount = "0";
         }
@@ -3021,6 +2894,7 @@ export default function Page() {
       autoprint: "1",
       includeSign: invoiceIncludeSignAndStamp ? "1" : "0",
       includeBank: invoiceIncludeBankAccount ? "1" : "0",
+      includeDot: invoiceDotMatrixMode ? "1" : "0",
       includeTax,
       includeTaxMode,
       includeTaxRate,
@@ -6714,14 +6588,36 @@ export default function Page() {
                     />
                   </label>
                 ) : null}
-                <label className="grid gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-sm text-slate-600">
-                  <span>No Telepon</span>
-                  <input value={invoicePhone} onChange={(e) => setInvoicePhone(e.target.value)} className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                </label>
-                <label className="grid gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-sm text-slate-600">
-                  <span>No WhatsApp Tujuan</span>
-                  <input value={invoiceWhatsapp} onChange={(e) => setInvoiceWhatsapp(e.target.value)} placeholder="Contoh: 08123456789 / 628123456789" className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
-                </label>
+                <div className="grid gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-sm text-slate-600">
+                  <span>No WhatsApp Pembeli</span>
+                  <div className="grid gap-2 sm:grid-cols-[200px_1fr]">
+                    <div className="grid gap-2">
+                      <input
+                        value={invoiceWhatsappCountrySearch}
+                        onChange={(e) => setInvoiceWhatsappCountrySearch(e.target.value)}
+                        placeholder="Cari negara / kode, contoh: indo, 62, +1"
+                        className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                      />
+                      <select
+                        value={invoiceWhatsappCountryCode}
+                        onChange={(e) => applyWhatsappFromParts(e.target.value, invoiceWhatsappLocalNumber)}
+                        className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                      >
+                        {(filteredWhatsappCountryCodes.length ? filteredWhatsappCountryCodes : WHATSAPP_COUNTRY_CODES).map((entry) => (
+                          <option key={`${entry.code}-${entry.label}`} value={entry.code}>
+                            +{entry.code} - {entry.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <input
+                      value={invoiceWhatsappLocalNumber}
+                      onChange={(e) => applyWhatsappFromParts(invoiceWhatsappCountryCode, e.target.value)}
+                      placeholder="Nomor tanpa kode negara, contoh: 8123456789"
+                      className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                    />
+                  </div>
+                </div>
                 <label className="grid gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/60 p-2.5 text-sm text-slate-600">
                   <span>Kurir Pengiriman</span>
                   <input value={invoiceCourier} onChange={(e) => setInvoiceCourier(e.target.value)} placeholder="Contoh: JNE REG" className="w-full rounded-2xl border border-stone-200 bg-white/90 px-3 py-2.5 text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200" />
@@ -6886,6 +6782,15 @@ export default function Page() {
                     className="h-4 w-4 accent-stone-700"
                   />
                   <span>Tampilkan No Rekening</span>
+                </label>
+                <label className="inline-flex items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <input
+                    type="checkbox"
+                    checked={invoiceDotMatrixMode}
+                    onChange={(e) => setInvoiceDotMatrixMode(e.target.checked)}
+                    className="h-4 w-4 accent-amber-700"
+                  />
+                  <span>Mode Dot Matrix</span>
                 </label>
                 {invoiceDocType === "faktur" ? (
                   <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">

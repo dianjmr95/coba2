@@ -1,8 +1,14 @@
 import { getSupabaseAdmin } from "../../../lib/supabaseAdmin";
+import type { Metadata } from "next";
 import AutoPrintTrigger from "./AutoPrintTrigger";
 import PrintActions from "./PrintActions";
 
 const DEFAULT_BANK_ACCOUNT_INFO = "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA";
+
+export const metadata: Metadata = {
+  title: "Dokumen Starcomp Solo",
+  description: "Dokumen faktur dan penawaran Starcomp Solo."
+};
 
 type DocumentItem = {
   nama: string;
@@ -125,6 +131,7 @@ export default async function DokumenPage({
     autoprint?: string;
     includeSign?: string;
     includeBank?: string;
+    includeDot?: string;
     includeTax?: string;
     includeTaxMode?: string;
     includeTaxAmount?: string;
@@ -141,6 +148,7 @@ export default async function DokumenPage({
   const shouldAutoPrint = String(query?.autoprint || "").trim() === "1";
   const includeSignAndStamp = String(query?.includeSign || "1").trim() !== "0";
   const includeBankAccount = String(query?.includeBank || "").trim() === "1";
+  const dotMatrixMode = String(query?.includeDot || "").trim() === "1";
   const includeSuratJalan = String(query?.includeSJ || "1").trim() !== "0";
   const includeBast = String(query?.includeBAST || "1").trim() !== "0";
   const includeTaxParamRaw = String(query?.includeTax || "").trim();
@@ -344,12 +352,12 @@ export default async function DokumenPage({
       ? "Harga diatas sudah termasuk Faktur Pajak."
       : "Harga diatas belum termasuk Faktur Pajak (PPN ditambahkan terpisah).";
   const buyerValue = String(data.buyer || "").trim();
-  const phoneValue = String(data.phone || "").trim();
   const whatsappValue = String(data.whatsapp || "").trim();
+  const contactWhatsappValue = whatsappValue || String(data.phone || "").trim();
   const addressValue = String(data.address || "").trim();
   const courierValue = String(data.courier || "").trim();
   const salesPicValue = String(data.sales_pic || "").trim();
-  const hasBuyerBox = Boolean(buyerValue || phoneValue || whatsappValue || addressValue);
+  const hasBuyerBox = Boolean(buyerValue || contactWhatsappValue || addressValue);
   const suratJalanNo = `${data.document_no}/SJ`;
   const bastNo = `${data.document_no}/BAST`;
 
@@ -357,10 +365,16 @@ export default async function DokumenPage({
     <main className="mx-auto min-h-screen max-w-4xl bg-white px-4 py-8 text-slate-900">
       <AutoPrintTrigger enabled={shouldAutoPrint} />
       <PrintActions />
-      <section className="sheet rounded-md border border-stone-300 p-4 print:border-none print:p-0">
+      <section className={`sheet rounded-md border border-stone-300 p-4 print:border-none print:p-0 ${dotMatrixMode ? "dot-matrix" : ""}`}>
         <style>{`
           @media print {
             @page { size: A4; margin: 12mm; }
+            * { color: #000 !important; text-shadow: none !important; }
+            .sheet { font-size: 12px !important; }
+            .sheet .stamp,
+            .sheet .delivery-stamp,
+            .sheet .signature,
+            .sheet .delivery-signature { display: none !important; }
           }
           .sheet .header { display: flex; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
           .sheet .company { width: 50%; padding-right: 8px; }
@@ -372,20 +386,20 @@ export default async function DokumenPage({
           .sheet .title { margin: 10px 0 8px; text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 0.11em; }
           .sheet .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
           .sheet .meta.single { grid-template-columns: 1fr; }
-          .sheet .box { border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 68px; }
+          .sheet .box { border: 1.5px solid #000; border-radius: 3px; padding: 8px; min-height: 68px; }
           .sheet .box p { margin: 0 0 3px; font-size: 10px; }
           .sheet .doc-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
-          .sheet .doc-table th, .sheet .doc-table td { border: 1px solid #999; padding: 5px; font-size: 10px; }
-          .sheet .doc-table th { background: #f2f2f2; font-weight: 700; }
+          .sheet .doc-table th, .sheet .doc-table td { border: 1.5px solid #000; padding: 6px; font-size: 11px; }
+          .sheet .doc-table th { background: #fff; font-weight: 700; }
           .sheet .right { text-align: right; }
           .sheet .total { margin-top: 8px; display: flex; justify-content: flex-end; font-size: 14px; font-weight: 700; }
-          .sheet .notes { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; min-height: 42px; font-size: 10px; }
-          .sheet .terms { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.5; }
+          .sheet .notes { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; min-height: 42px; font-size: 10px; }
+          .sheet .terms { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.5; }
           .sheet .terms-title { font-weight: 700; margin-bottom: 4px; }
           .sheet .terms-list { margin: 0; padding-left: 16px; }
           .sheet .terms-closing { margin-top: 8px; }
-          .sheet .bank-section { margin-top: 8px; border: 1px solid #999; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.45; }
-          .sheet .bank-box { margin-top: 8px; border-top: 1px dashed #bbb; padding-top: 6px; line-height: 1.45; }
+          .sheet .bank-section { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.45; }
+          .sheet .bank-box { margin-top: 8px; border-top: 1.5px dashed #000; padding-top: 6px; line-height: 1.45; }
           .sheet .bank-label { font-weight: 700; }
           .sheet .sign { margin-top: 30px; display: flex; justify-content: flex-end; }
           .sheet .sign-box { width: 180px; text-align: center; font-size: 10px; position: relative; }
@@ -400,6 +414,20 @@ export default async function DokumenPage({
           .sheet .delivery-sign-space.no-visual { height: 82px; }
           .sheet .delivery-stamp { position: absolute; left: 50%; top: 6px; width: 126px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
           .sheet .delivery-signature { position: absolute; left: 50%; top: 22px; width: 102px; transform: translateX(-50%); z-index: 1; }
+          .sheet.dot-matrix { font-family: "Courier New", Consolas, monospace; letter-spacing: 0; }
+          .sheet.dot-matrix .company h1 { font-size: 24px; letter-spacing: 0; }
+          .sheet.dot-matrix .title { font-size: 18px; letter-spacing: 0.04em; }
+          .sheet.dot-matrix .box p,
+          .sheet.dot-matrix .notes,
+          .sheet.dot-matrix .terms,
+          .sheet.dot-matrix .bank-section { font-size: 11px; line-height: 1.45; }
+          .sheet.dot-matrix .doc-table th,
+          .sheet.dot-matrix .doc-table td { font-size: 11px; padding: 4px 5px; }
+          .sheet.dot-matrix .logo { width: 170px; }
+          .sheet.dot-matrix .stamp,
+          .sheet.dot-matrix .delivery-stamp,
+          .sheet.dot-matrix .signature,
+          .sheet.dot-matrix .delivery-signature { display: none !important; }
         `}</style>
 
         <div className="header">
@@ -428,8 +456,7 @@ export default async function DokumenPage({
           {hasBuyerBox ? (
             <div className="box">
               {buyerValue ? <p><strong>Pembeli:</strong> {buyerValue}</p> : null}
-              {phoneValue ? <p><strong>Telepon:</strong> {phoneValue}</p> : null}
-              {whatsappValue ? <p><strong>WhatsApp:</strong> {whatsappValue}</p> : null}
+              {contactWhatsappValue ? <p><strong>WhatsApp:</strong> {contactWhatsappValue}</p> : null}
               {addressValue ? <p><strong>Alamat:</strong> {addressValue}</p> : null}
             </div>
           ) : null}
@@ -607,7 +634,7 @@ export default async function DokumenPage({
               </div>
               <div className="box">
                 <p><strong>Dikirim Kepada:</strong> {buyerValue || "-"}</p>
-                {phoneValue ? <p><strong>Telepon:</strong> {phoneValue}</p> : null}
+                {contactWhatsappValue ? <p><strong>WhatsApp:</strong> {contactWhatsappValue}</p> : null}
                 <p><strong>Alamat:</strong> {addressValue || "-"}</p>
               </div>
             </div>
@@ -690,7 +717,7 @@ export default async function DokumenPage({
               </div>
               <div className="box">
                 <p><strong>Diserahkan Kepada:</strong> {buyerValue || "-"}</p>
-                {phoneValue ? <p><strong>Telepon:</strong> {phoneValue}</p> : null}
+                {contactWhatsappValue ? <p><strong>WhatsApp:</strong> {contactWhatsappValue}</p> : null}
                 <p><strong>Alamat:</strong> {addressValue || "-"}</p>
               </div>
             </div>
