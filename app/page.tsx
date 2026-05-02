@@ -1657,30 +1657,50 @@ export default function Page() {
 
   const loadRecapRows = useCallback(async () => {
     try {
-      const { data, error, status } = await supabase
-        .from(RECAP_SUPABASE_TABLE)
-        .select("*")
-        .order("tanggal", { ascending: false });
+      const pageSize = 1000;
+      const allRows: unknown[] = [];
+      let fetchError: unknown = null;
+      let fetchStatus: number | undefined;
+      let from = 0;
 
-      if (error) {
+      while (true) {
+        const { data, error, status } = await supabase
+          .from(RECAP_SUPABASE_TABLE)
+          .select("*")
+          .order("tanggal", { ascending: false })
+          .range(from, from + pageSize - 1);
+
+        fetchStatus = status;
+        if (error) {
+          fetchError = error;
+          break;
+        }
+
+        const chunk = Array.isArray(data) ? data : [];
+        allRows.push(...chunk);
+        if (chunk.length < pageSize) break;
+        from += pageSize;
+      }
+
+      if (fetchError) {
         // Keep the last successful snapshot so data does not disappear on transient fetch errors.
         const cachedRows = readRecapCache();
         if (cachedRows.length) {
           setRecapRows(cachedRows);
           setRecapNotice(
             `${formatSupabaseError(
-              `Memuat rekap dari Supabase (status ${status || "-"})`,
-              error
+              `Memuat rekap dari Supabase (status ${fetchStatus || "-"})`,
+              fetchError
             )} Menampilkan cache lokal terakhir.`
           );
           return;
         }
 
-        setRecapNotice(formatSupabaseError(`Memuat rekap dari Supabase (status ${status || "-"})`, error));
+        setRecapNotice(formatSupabaseError(`Memuat rekap dari Supabase (status ${fetchStatus || "-"})`, fetchError));
         return;
       }
 
-      const rows = (Array.isArray(data) ? data : [])
+      const rows = allRows
         .map((item) => normalizeRecapRow(item))
         .filter((row): row is SalesRecapRow => Boolean(row));
 
@@ -3546,6 +3566,21 @@ export default function Page() {
     setRecapSyncMessage("Menyimpan ke Supabase...");
 
     try {
+      const retentionCutoffDate = new Date();
+      retentionCutoffDate.setFullYear(retentionCutoffDate.getFullYear() - 2);
+      const retentionCutoffIso = retentionCutoffDate.toISOString();
+
+      const retentionCleanupResult = await runSupabaseWithRetry(
+        () => supabase.from(RECAP_SUPABASE_TABLE).delete().lt("created_at", retentionCutoffIso),
+        1
+      );
+      if (retentionCleanupResult.error) {
+        setRecapSyncStatus("error");
+        setRecapSyncMessage("Gagal membersihkan data lama.");
+        setRecapNotice(formatSupabaseError("Membersihkan data rekap lebih dari 2 tahun", retentionCleanupResult.error));
+        return false;
+      }
+
       const komisiAfiliasiMarketplace = recapMarketplaceKomisiAfiliasiAktif ? recapMarketplaceKomisiAfiliasi : 0;
       const normalizedOrderItems = recapOrderItems
         .map((item) => ({
