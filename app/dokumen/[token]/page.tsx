@@ -486,10 +486,6 @@ export default async function DokumenPage({
           .sheet.dot-matrix .doc-table th,
           .sheet.dot-matrix .doc-table td { font-size: 11px; padding: 4px 5px; }
           .sheet.dot-matrix .logo { width: 170px; }
-          .sheet.dot-matrix .stamp,
-          .sheet.dot-matrix .delivery-stamp,
-          .sheet.dot-matrix .signature,
-          .sheet.dot-matrix .delivery-signature { display: none !important; }
         `}</style>
 
         <div className="header">
