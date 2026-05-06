@@ -44,6 +44,10 @@ type LegacyDocumentMeta = {
   taxAmount?: number;
   grandTotal?: number;
   subtotalBeforeDiscount?: number;
+  manualSignatureDataUrl?: string;
+  manualSignatureScale?: number;
+  manualSignatureContrast?: number;
+  manualSignatureBrightness?: number;
 };
 
 const LEGACY_META_PREFIX = "[[DOC_META:";
@@ -246,6 +250,10 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         courier: data.courier,
         salesPic: data.sales_pic,
         notes: cleanNotes,
+        manualSignatureDataUrl: String(legacyMeta?.manualSignatureDataUrl || "").trim(),
+        manualSignatureScale: Math.min(2.2, Math.max(0.7, Number(legacyMeta?.manualSignatureScale) || 1.68)),
+        manualSignatureContrast: Math.min(2.2, Math.max(0.8, Number(legacyMeta?.manualSignatureContrast) || 1.45)),
+        manualSignatureBrightness: Math.min(1.2, Math.max(0.6, Number(legacyMeta?.manualSignatureBrightness) || 0.92)),
         items: normalizedItems,
         subtotal,
         discountAmount,

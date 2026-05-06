@@ -46,6 +46,10 @@ type LegacyDocumentMeta = {
   taxRate?: number;
   taxAmount?: number;
   grandTotal?: number;
+  manualSignatureDataUrl?: string;
+  manualSignatureScale?: number;
+  manualSignatureContrast?: number;
+  manualSignatureBrightness?: number;
 };
 
 const LEGACY_META_PREFIX = "[[DOC_META:";
@@ -263,6 +267,13 @@ export default async function DokumenPage({
 
   const items = normalizeItems(data.items);
   const { cleanNotes, meta: legacyMeta } = parseLegacyMetaFromNotes(data.notes);
+  const manualSignatureDataUrlRaw = String(legacyMeta?.manualSignatureDataUrl || "").trim();
+  const manualSignatureDataUrl = manualSignatureDataUrlRaw.startsWith("data:image/") ? manualSignatureDataUrlRaw : "";
+  const manualSignatureScale = Math.min(2.2, Math.max(0.7, Number(legacyMeta?.manualSignatureScale) || 1.68));
+  const manualSignatureContrast = Math.min(2.2, Math.max(0.8, Number(legacyMeta?.manualSignatureContrast) || 1.45));
+  const manualSignatureBrightness = Math.min(1.2, Math.max(0.6, Number(legacyMeta?.manualSignatureBrightness) || 0.92));
+  const hasManualSignature = Boolean(manualSignatureDataUrl);
+  const shouldShowSignAndStamp = includeSignAndStamp || hasManualSignature;
   const isPenawaran = data.document_type === "penawaran";
   const docTitle = isPenawaran ? "SURAT PENAWARAN BARANG" : "FAKTUR PENJUALAN";
   const docNoLabel = isPenawaran ? "No Penawaran" : "No Faktur";
@@ -367,14 +378,17 @@ export default async function DokumenPage({
       <PrintActions />
       <section className={`sheet rounded-md border border-stone-300 p-4 print:border-none print:p-0 ${dotMatrixMode ? "dot-matrix" : ""}`}>
         <style>{`
+          .sheet {
+            --manual-sign-scale: ${manualSignatureScale};
+            --manual-sign-contrast: ${manualSignatureContrast};
+            --manual-sign-brightness: ${manualSignatureBrightness};
+          }
+        `}</style>
+        <style>{`
           @media print {
             @page { size: A4; margin: 12mm; }
             * { color: #000 !important; text-shadow: none !important; }
             .sheet { font-size: 12px !important; }
-            .sheet .stamp,
-            .sheet .delivery-stamp,
-            .sheet .signature,
-            .sheet .delivery-signature { display: none !important; }
           }
           .sheet .header { display: flex; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
           .sheet .company { width: 50%; padding-right: 8px; }
@@ -405,15 +419,27 @@ export default async function DokumenPage({
           .sheet .sign-box { width: 180px; text-align: center; font-size: 10px; position: relative; }
           .sheet .sign-space { height: 74px; position: relative; }
           .sheet .sign-space.no-visual { height: 74px; }
-          .sheet .stamp { position: absolute; left: 50%; top: 2px; width: 132px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
-          .sheet .signature { position: absolute; left: 50%; top: 17px; width: 106px; transform: translateX(-50%); z-index: 1; }
+          .sheet .stamp { position: absolute; left: 50%; top: 2px; width: 132px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 1; }
+          .sheet .signature { position: absolute; left: 50%; top: 17px; width: 106px; height: 42px; transform: translateX(-50%); z-index: 2; object-fit: contain; object-position: center; }
+          .sheet .signature.manual-signature {
+            top: 0;
+            width: calc(106px * var(--manual-sign-scale));
+            height: calc(42px * var(--manual-sign-scale));
+            filter: contrast(var(--manual-sign-contrast)) saturate(1.2) brightness(var(--manual-sign-brightness)) drop-shadow(0 0 0.2px rgba(0, 0, 0, 0.5));
+          }
           .sheet .page-break { break-before: page; page-break-before: always; margin-top: 20px; }
           .sheet .delivery-sign { margin-top: 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
           .sheet .delivery-sign-box { text-align: center; font-size: 10px; }
           .sheet .delivery-sign-space { height: 82px; position: relative; }
           .sheet .delivery-sign-space.no-visual { height: 82px; }
-          .sheet .delivery-stamp { position: absolute; left: 50%; top: 6px; width: 126px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 2; }
-          .sheet .delivery-signature { position: absolute; left: 50%; top: 22px; width: 102px; transform: translateX(-50%); z-index: 1; }
+          .sheet .delivery-stamp { position: absolute; left: 50%; top: 6px; width: 126px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 1; }
+          .sheet .delivery-signature { position: absolute; left: 50%; top: 22px; width: 102px; height: 40px; transform: translateX(-50%); z-index: 2; object-fit: contain; object-position: center; }
+          .sheet .delivery-signature.manual-signature {
+            top: 4px;
+            width: calc(102px * var(--manual-sign-scale));
+            height: calc(40px * var(--manual-sign-scale));
+            filter: contrast(var(--manual-sign-contrast)) saturate(1.2) brightness(var(--manual-sign-brightness)) drop-shadow(0 0 0.2px rgba(0, 0, 0, 0.5));
+          }
           .sheet.dot-matrix { font-family: "Courier New", Consolas, monospace; letter-spacing: 0; }
           .sheet.dot-matrix .company h1 { font-size: 24px; letter-spacing: 0; }
           .sheet.dot-matrix .title { font-size: 18px; letter-spacing: 0.04em; }
@@ -600,9 +626,9 @@ export default async function DokumenPage({
         <div className="sign">
           <div className="sign-box">
             <div>Hormat kami,</div>
-            <div className={`sign-space ${includeSignAndStamp ? "" : "no-visual"}`}>
-              {includeSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="stamp" /> : null}
-              {includeSignAndStamp ? <img src="/signature-starcomp.png" alt="Tanda tangan" className="signature" /> : null}
+            <div className={`sign-space ${shouldShowSignAndStamp ? "" : "no-visual"}`}>
+              {shouldShowSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="stamp" /> : null}
+              {shouldShowSignAndStamp ? <img src={manualSignatureDataUrl || "/signature-starcomp.png"} alt="Tanda tangan" className={`signature ${hasManualSignature ? "manual-signature" : ""}`} /> : null}
             </div>
             <div><strong>STARCOMP SOLO</strong></div>
           </div>
@@ -677,9 +703,9 @@ export default async function DokumenPage({
             <div className="delivery-sign">
               <div className="delivery-sign-box">
                 <div>Pengirim,</div>
-                <div className={`delivery-sign-space ${includeSignAndStamp ? "" : "no-visual"}`}>
-                  {includeSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="delivery-stamp" /> : null}
-                  {includeSignAndStamp ? <img src="/signature-starcomp.png" alt="Tanda tangan" className="delivery-signature" /> : null}
+                <div className={`delivery-sign-space ${shouldShowSignAndStamp ? "" : "no-visual"}`}>
+                  {shouldShowSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="delivery-stamp" /> : null}
+                  {shouldShowSignAndStamp ? <img src={manualSignatureDataUrl || "/signature-starcomp.png"} alt="Tanda tangan" className={`delivery-signature ${hasManualSignature ? "manual-signature" : ""}`} /> : null}
                 </div>
                 <div><strong>STARCOMP SOLO</strong></div>
               </div>
@@ -760,9 +786,9 @@ export default async function DokumenPage({
             <div className="delivery-sign">
               <div className="delivery-sign-box">
                 <div>Yang Menyerahkan,</div>
-                <div className={`delivery-sign-space ${includeSignAndStamp ? "" : "no-visual"}`}>
-                  {includeSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="delivery-stamp" /> : null}
-                  {includeSignAndStamp ? <img src="/signature-starcomp.png" alt="Tanda tangan" className="delivery-signature" /> : null}
+                <div className={`delivery-sign-space ${shouldShowSignAndStamp ? "" : "no-visual"}`}>
+                  {shouldShowSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="delivery-stamp" /> : null}
+                  {shouldShowSignAndStamp ? <img src={manualSignatureDataUrl || "/signature-starcomp.png"} alt="Tanda tangan" className={`delivery-signature ${hasManualSignature ? "manual-signature" : ""}`} /> : null}
                 </div>
                 <div><strong>STARCOMP SOLO</strong></div>
               </div>

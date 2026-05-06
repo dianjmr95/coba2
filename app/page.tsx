@@ -88,6 +88,10 @@ type SalesDocumentDetailResponse = {
     courier: string;
     salesPic: string;
     notes: string;
+    manualSignatureDataUrl?: string;
+    manualSignatureScale?: number;
+    manualSignatureContrast?: number;
+    manualSignatureBrightness?: number;
     items: Array<{ nama: string; qty: number; harga: number }>;
     subtotal: number;
     discountAmount?: number;
@@ -1378,6 +1382,10 @@ export default function Page() {
   const [invoiceTaxEnabled, setInvoiceTaxEnabled] = useState(false);
   const [invoiceTaxMode, setInvoiceTaxMode] = useState<InvoiceTaxMode>("exclude");
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
+  const [invoiceManualSignatureDataUrl, setInvoiceManualSignatureDataUrl] = useState("");
+  const [invoiceManualSignatureScale, setInvoiceManualSignatureScale] = useState(1.68);
+  const [invoiceManualSignatureContrast, setInvoiceManualSignatureContrast] = useState(1.45);
+  const [invoiceManualSignatureBrightness, setInvoiceManualSignatureBrightness] = useState(0.92);
   const [invoiceIncludeBankAccount, setInvoiceIncludeBankAccount] = useState(true);
   const [invoiceDotMatrixMode, setInvoiceDotMatrixMode] = useState(false);
   const [invoiceIncludeSuratJalan, setInvoiceIncludeSuratJalan] = useState(true);
@@ -2277,8 +2285,41 @@ export default function Page() {
     setInvoiceCourier("");
     setInvoiceAddress("");
     setInvoiceNotes("");
+    setInvoiceManualSignatureDataUrl("");
+    setInvoiceManualSignatureScale(1.68);
+    setInvoiceManualSignatureContrast(1.45);
+    setInvoiceManualSignatureBrightness(0.92);
     setInvoiceItems([{ id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }]);
     setInvoiceSaveNotice("");
+  }
+
+  function onInvoiceManualSignatureFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      window.alert("File TTD harus berupa gambar (PNG/JPG/WebP).");
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 1_000_000) {
+      window.alert("Ukuran gambar TTD maksimal 1MB.");
+      event.target.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      if (!result.startsWith("data:image/")) {
+        window.alert("Format gambar TTD tidak valid.");
+        return;
+      }
+      setInvoiceManualSignatureDataUrl(result);
+    };
+    reader.onerror = () => {
+      window.alert("Gagal membaca file TTD.");
+    };
+    reader.readAsDataURL(file);
+    event.target.value = "";
   }
 
   function updateInvoiceItem(id: string, key: "nama" | "qty" | "harga", value: string | number) {
@@ -2472,6 +2513,10 @@ export default function Page() {
           courier: invoiceCourier,
           salesPic: invoiceDocType === "penawaran" ? invoiceSalesPic : "",
           notes: invoiceNotes,
+          manualSignatureDataUrl: invoiceManualSignatureDataUrl,
+          manualSignatureScale: invoiceManualSignatureScale,
+          manualSignatureContrast: invoiceManualSignatureContrast,
+          manualSignatureBrightness: invoiceManualSignatureBrightness,
           items: normalizedItems,
           subtotal: invoiceSubtotal,
           discountAmount: invoiceDiscountValue,
@@ -2835,6 +2880,10 @@ export default function Page() {
       setInvoiceAddress(detail.address || "");
       setInvoiceCourier(detail.courier || "");
       setInvoiceNotes(detail.notes || "");
+      setInvoiceManualSignatureDataUrl(detail.manualSignatureDataUrl || "");
+      setInvoiceManualSignatureScale(Math.min(2.2, Math.max(0.7, Number(detail.manualSignatureScale) || 1.68)));
+      setInvoiceManualSignatureContrast(Math.min(2.2, Math.max(0.8, Number(detail.manualSignatureContrast) || 1.45)));
+      setInvoiceManualSignatureBrightness(Math.min(1.2, Math.max(0.6, Number(detail.manualSignatureBrightness) || 0.92)));
       setInvoiceDiscountAmount(
         Math.min(
           Math.max(0, Number(detail.subtotal) || 0),
@@ -6818,6 +6867,72 @@ export default function Page() {
                   />
                   <span>Tampilkan TTD & Cap</span>
                 </label>
+                <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                  <span>TTD Manual</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    onChange={onInvoiceManualSignatureFileChange}
+                    className="block w-[180px] text-xs text-slate-600 file:mr-2 file:rounded-lg file:border-0 file:bg-stone-100 file:px-2 file:py-1 file:text-xs file:font-medium"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setInvoiceManualSignatureDataUrl("")}
+                  disabled={!invoiceManualSignatureDataUrl}
+                  className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Hapus TTD Manual
+                </button>
+                {invoiceManualSignatureDataUrl ? (
+                  <div className="rounded-xl border border-stone-200 bg-white px-3 py-2">
+                    <p className="mb-1 text-xs text-slate-500">Preview TTD Manual</p>
+                    <img src={invoiceManualSignatureDataUrl} alt="Preview TTD manual" className="h-16 w-auto object-contain" />
+                  </div>
+                ) : null}
+                {invoiceManualSignatureDataUrl ? (
+                  <div className="grid gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <label className="grid gap-1">
+                      <span>Ukuran TTD Manual ({invoiceManualSignatureScale.toFixed(2)}x)</span>
+                      <input
+                        type="range"
+                        min={0.7}
+                        max={2.2}
+                        step={0.01}
+                        value={invoiceManualSignatureScale}
+                        onChange={(e) => setInvoiceManualSignatureScale(Number(e.target.value))}
+                        className="w-full"
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span>Kontras TTD Manual ({invoiceManualSignatureContrast.toFixed(2)})</span>
+                      <input
+                        type="range"
+                        min={0.8}
+                        max={2.2}
+                        step={0.01}
+                        value={invoiceManualSignatureContrast}
+                        onChange={(e) => setInvoiceManualSignatureContrast(Number(e.target.value))}
+                        className="w-full"
+                      />
+                    </label>
+                    <label className="grid gap-1">
+                      <span>Kecerahan TTD Manual ({invoiceManualSignatureBrightness.toFixed(2)})</span>
+                      <input
+                        type="range"
+                        min={0.6}
+                        max={1.2}
+                        step={0.01}
+                        value={invoiceManualSignatureBrightness}
+                        onChange={(e) => setInvoiceManualSignatureBrightness(Number(e.target.value))}
+                        className="w-full"
+                      />
+                    </label>
+                  </div>
+                ) : null}
+                <p className="text-xs text-slate-500">
+                  Jika TTD manual dihapus, tampilan kembali mengikuti opsi `Tampilkan TTD & Cap`.
+                </p>
                 <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
                   <input
                     type="checkbox"

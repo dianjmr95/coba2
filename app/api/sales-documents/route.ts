@@ -32,6 +32,10 @@ type SalesDocumentRequest = {
   taxAmount?: number;
   grandTotal?: number;
   downPaymentPercent?: number;
+  manualSignatureDataUrl?: string;
+  manualSignatureScale?: number;
+  manualSignatureContrast?: number;
+  manualSignatureBrightness?: number;
   markPrinted?: boolean;
 };
 
@@ -44,6 +48,10 @@ type LegacyDocumentMeta = {
   taxAmount?: number;
   grandTotal?: number;
   subtotalBeforeDiscount?: number;
+  manualSignatureDataUrl?: string;
+  manualSignatureScale?: number;
+  manualSignatureContrast?: number;
+  manualSignatureBrightness?: number;
 };
 
 const LEGACY_META_PREFIX = "[[DOC_META:";
@@ -114,6 +122,13 @@ function stripLegacyMetaNotes(notes: string) {
 
 function buildLegacyMetaNotes(notes: string, meta: LegacyDocumentMeta) {
   const baseNotes = stripLegacyMetaNotes(notes);
+  const manualSignatureDataUrlRaw = String(meta.manualSignatureDataUrl || "").trim();
+  const manualSignatureDataUrl = manualSignatureDataUrlRaw.startsWith("data:image/")
+    ? manualSignatureDataUrlRaw.slice(0, 400_000)
+    : "";
+  const manualSignatureScale = Math.min(2.2, Math.max(0.7, Number(meta.manualSignatureScale) || 1.68));
+  const manualSignatureContrast = Math.min(2.2, Math.max(0.8, Number(meta.manualSignatureContrast) || 1.45));
+  const manualSignatureBrightness = Math.min(1.2, Math.max(0.6, Number(meta.manualSignatureBrightness) || 0.92));
   const safeMeta = {
     discountAmount: Math.max(0, Number(meta.discountAmount) || 0),
     downPaymentPercent: Math.min(100, Math.max(0, Number(meta.downPaymentPercent) || 0)),
@@ -122,7 +137,11 @@ function buildLegacyMetaNotes(notes: string, meta: LegacyDocumentMeta) {
     taxRate: Math.max(0, Number(meta.taxRate) || 0),
     taxAmount: Math.max(0, Number(meta.taxAmount) || 0),
     grandTotal: Math.max(0, Number(meta.grandTotal) || 0),
-    subtotalBeforeDiscount: Math.max(0, Number(meta.subtotalBeforeDiscount) || 0)
+    subtotalBeforeDiscount: Math.max(0, Number(meta.subtotalBeforeDiscount) || 0),
+    manualSignatureDataUrl,
+    manualSignatureScale,
+    manualSignatureContrast,
+    manualSignatureBrightness
   } satisfies Required<LegacyDocumentMeta>;
   const metaText = `${LEGACY_META_PREFIX}${JSON.stringify(safeMeta)}${LEGACY_META_SUFFIX}`;
   return baseNotes ? `${baseNotes}\n${metaText}` : metaText;
@@ -169,6 +188,13 @@ export async function POST(request: NextRequest) {
       0,
       Math.round(Number(body.grandTotal) || discountedSubtotal + taxAmount)
     );
+    const manualSignatureDataUrlRaw = String(body.manualSignatureDataUrl || "").trim();
+    const manualSignatureDataUrl = manualSignatureDataUrlRaw.startsWith("data:image/")
+      ? manualSignatureDataUrlRaw.slice(0, 400_000)
+      : "";
+    const manualSignatureScale = Math.min(2.2, Math.max(0.7, Number(body.manualSignatureScale) || 1.68));
+    const manualSignatureContrast = Math.min(2.2, Math.max(0.8, Number(body.manualSignatureContrast) || 1.45));
+    const manualSignatureBrightness = Math.min(1.2, Math.max(0.6, Number(body.manualSignatureBrightness) || 0.92));
     const markPrinted = Boolean(body.markPrinted);
 
     if (!publicToken) {
@@ -216,7 +242,20 @@ export async function POST(request: NextRequest) {
       address: String(body.address || "").trim(),
       courier: String(body.courier || "").trim(),
       sales_pic: documentType === "penawaran" ? String(body.salesPic || "").trim() : "",
-      notes: String(body.notes || "").trim(),
+      notes: buildLegacyMetaNotes(String(body.notes || "").trim(), {
+        discountAmount,
+        downPaymentPercent,
+        taxEnabled,
+        taxMode,
+        taxRate,
+        taxAmount,
+        grandTotal,
+        subtotalBeforeDiscount: subtotal,
+        manualSignatureDataUrl,
+        manualSignatureScale,
+        manualSignatureContrast,
+        manualSignatureBrightness
+      }),
       items,
       subtotal,
       discount_amount: discountAmount,
@@ -243,7 +282,11 @@ export async function POST(request: NextRequest) {
         taxRate,
         taxAmount,
         grandTotal,
-        subtotalBeforeDiscount: subtotal
+        subtotalBeforeDiscount: subtotal,
+        manualSignatureDataUrl,
+        manualSignatureScale,
+        manualSignatureContrast,
+        manualSignatureBrightness
       }),
       items,
       subtotal,
