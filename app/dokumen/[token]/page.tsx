@@ -4,6 +4,33 @@ import AutoPrintTrigger from "./AutoPrintTrigger";
 import PrintActions from "./PrintActions";
 
 const DEFAULT_BANK_ACCOUNT_INFO = "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA";
+const LETTERHEAD_PROFILES = [
+  {
+    id: "RJ",
+    companyName: "STARCOMP RAJAWALI",
+    subtitle: "Computer Store",
+    address: "Jl. Rajawali Raya No.37, Manukan, Condongcatur, Kec. Depok, Kabupaten Sleman, Daerah Istimewa Yogyakarta 55582",
+    phone: "08112747434",
+    logoUrl: "/starcomp-logo.png"
+  },
+  {
+    id: "JKL",
+    companyName: "STARCOMP JAKAL",
+    subtitle: "Computer Store",
+    address: "Kaliurang St No.Km 14, Tj. Manding, Umbulmartani, Ngemplak, Sleman Regency, Special Region of Yogyakarta 55584",
+    phone: "08112631352",
+    logoUrl: "/starcomp-logo.png"
+  },
+  {
+    id: "SLO",
+    companyName: "STARCOMP SOLO",
+    subtitle: "Computer Store",
+    address: "Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169",
+    phone: "08112642352",
+    logoUrl: "/starcomp-logo.png"
+  }
+] as const;
+const DEFAULT_LETTERHEAD_PROFILE = LETTERHEAD_PROFILES[0];
 
 export const metadata: Metadata = {
   title: "Dokumen Starcomp Solo",
@@ -50,6 +77,8 @@ type LegacyDocumentMeta = {
   manualSignatureScale?: number;
   manualSignatureContrast?: number;
   manualSignatureBrightness?: number;
+  letterheadLogoDataUrl?: string;
+  letterheadProfileId?: string;
 };
 
 const LEGACY_META_PREFIX = "[[DOC_META:";
@@ -269,6 +298,13 @@ export default async function DokumenPage({
   const { cleanNotes, meta: legacyMeta } = parseLegacyMetaFromNotes(data.notes);
   const manualSignatureDataUrlRaw = String(legacyMeta?.manualSignatureDataUrl || "").trim();
   const manualSignatureDataUrl = manualSignatureDataUrlRaw.startsWith("data:image/") ? manualSignatureDataUrlRaw : "";
+  const letterheadLogoDataUrlRaw = String(legacyMeta?.letterheadLogoDataUrl || "").trim();
+  const letterheadProfileIdRaw = String(legacyMeta?.letterheadProfileId || "").trim();
+  const letterheadProfile =
+    LETTERHEAD_PROFILES.find((profile) => profile.id === letterheadProfileIdRaw) || DEFAULT_LETTERHEAD_PROFILE;
+  const letterheadLogoSrc = letterheadLogoDataUrlRaw.startsWith("data:image/")
+    ? letterheadLogoDataUrlRaw
+    : letterheadProfile.logoUrl;
   const manualSignatureScale = Math.min(2.2, Math.max(0.7, Number(legacyMeta?.manualSignatureScale) || 1.68));
   const manualSignatureContrast = Math.min(2.2, Math.max(0.8, Number(legacyMeta?.manualSignatureContrast) || 1.45));
   const manualSignatureBrightness = Math.min(1.2, Math.max(0.6, Number(legacyMeta?.manualSignatureBrightness) || 0.92));
@@ -458,14 +494,14 @@ export default async function DokumenPage({
 
         <div className="header">
           <div className="company">
-            <h1>STARCOMP SOLO</h1>
-            <p>Computer Store</p>
+            <h1>{letterheadProfile.companyName}</h1>
+            <p>{letterheadProfile.subtitle}</p>
             <p>{isPenawaran ? "Dokumen Penawaran Barang" : "Faktur Penjualan Resmi"}</p>
-            <p className="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
-            <p>No. Telp/WA: 08112642352</p>
+            <p className="address">{letterheadProfile.address}</p>
+            <p>No. Telp/WA: {letterheadProfile.phone}</p>
           </div>
           <div className="logo-wrap">
-            <img src="/starcomp-logo.png" alt="Logo Starcomp" className="logo" />
+            <img src={letterheadLogoSrc} alt="Logo Starcomp" className="logo" />
           </div>
         </div>
 
@@ -630,7 +666,7 @@ export default async function DokumenPage({
               {shouldShowSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="stamp" /> : null}
               {shouldShowSignAndStamp ? <img src={manualSignatureDataUrl || "/signature-starcomp.png"} alt="Tanda tangan" className={`signature ${hasManualSignature ? "manual-signature" : ""}`} /> : null}
             </div>
-            <div><strong>STARCOMP SOLO</strong></div>
+            <div><strong>{letterheadProfile.companyName}</strong></div>
           </div>
         </div>
 
@@ -638,14 +674,14 @@ export default async function DokumenPage({
           <div className="page-break">
             <div className="header">
               <div className="company">
-                <h1>STARCOMP SOLO</h1>
-                <p>Computer Store</p>
+                <h1>{letterheadProfile.companyName}</h1>
+                <p>{letterheadProfile.subtitle}</p>
                 <p>Dokumen Pengiriman Barang</p>
-                <p className="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
-                <p>No. Telp/WA: 08112642352</p>
+                <p className="address">{letterheadProfile.address}</p>
+                <p>No. Telp/WA: {letterheadProfile.phone}</p>
               </div>
               <div className="logo-wrap">
-                <img src="/starcomp-logo.png" alt="Logo Starcomp" className="logo" />
+                <img src={letterheadLogoSrc} alt="Logo Starcomp" className="logo" />
               </div>
             </div>
 
@@ -707,7 +743,7 @@ export default async function DokumenPage({
                   {shouldShowSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="delivery-stamp" /> : null}
                   {shouldShowSignAndStamp ? <img src={manualSignatureDataUrl || "/signature-starcomp.png"} alt="Tanda tangan" className={`delivery-signature ${hasManualSignature ? "manual-signature" : ""}`} /> : null}
                 </div>
-                <div><strong>STARCOMP SOLO</strong></div>
+                <div><strong>{letterheadProfile.companyName}</strong></div>
               </div>
               <div className="delivery-sign-box">
                 <div>Penerima,</div>
@@ -721,14 +757,14 @@ export default async function DokumenPage({
           <div className="page-break">
             <div className="header">
               <div className="company">
-                <h1>STARCOMP SOLO</h1>
-                <p>Computer Store</p>
+                <h1>{letterheadProfile.companyName}</h1>
+                <p>{letterheadProfile.subtitle}</p>
                 <p>Dokumen Serah Terima Barang</p>
-                <p className="address">Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169</p>
-                <p>No. Telp/WA: 08112642352</p>
+                <p className="address">{letterheadProfile.address}</p>
+                <p>No. Telp/WA: {letterheadProfile.phone}</p>
               </div>
               <div className="logo-wrap">
-                <img src="/starcomp-logo.png" alt="Logo Starcomp" className="logo" />
+                <img src={letterheadLogoSrc} alt="Logo Starcomp" className="logo" />
               </div>
             </div>
 
@@ -790,7 +826,7 @@ export default async function DokumenPage({
                   {shouldShowSignAndStamp ? <img src="/starcomp-logo.png" alt="Cap Starcomp" className="delivery-stamp" /> : null}
                   {shouldShowSignAndStamp ? <img src={manualSignatureDataUrl || "/signature-starcomp.png"} alt="Tanda tangan" className={`delivery-signature ${hasManualSignature ? "manual-signature" : ""}`} /> : null}
                 </div>
-                <div><strong>STARCOMP SOLO</strong></div>
+                <div><strong>{letterheadProfile.companyName}</strong></div>
               </div>
               <div className="delivery-sign-box">
                 <div>Yang Menerima,</div>

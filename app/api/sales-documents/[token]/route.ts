@@ -48,6 +48,8 @@ type LegacyDocumentMeta = {
   manualSignatureScale?: number;
   manualSignatureContrast?: number;
   manualSignatureBrightness?: number;
+  letterheadLogoDataUrl?: string;
+  letterheadProfileId?: string;
 };
 
 const LEGACY_META_PREFIX = "[[DOC_META:";
@@ -254,6 +256,8 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         manualSignatureScale: Math.min(2.2, Math.max(0.7, Number(legacyMeta?.manualSignatureScale) || 1.68)),
         manualSignatureContrast: Math.min(2.2, Math.max(0.8, Number(legacyMeta?.manualSignatureContrast) || 1.45)),
         manualSignatureBrightness: Math.min(1.2, Math.max(0.6, Number(legacyMeta?.manualSignatureBrightness) || 0.92)),
+        letterheadLogoDataUrl: String(legacyMeta?.letterheadLogoDataUrl || "").trim(),
+        letterheadProfileId: String(legacyMeta?.letterheadProfileId || "").trim(),
         items: normalizedItems,
         subtotal,
         discountAmount,

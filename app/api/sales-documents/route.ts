@@ -36,6 +36,8 @@ type SalesDocumentRequest = {
   manualSignatureScale?: number;
   manualSignatureContrast?: number;
   manualSignatureBrightness?: number;
+  letterheadLogoDataUrl?: string;
+  letterheadProfileId?: string;
   markPrinted?: boolean;
 };
 
@@ -52,6 +54,8 @@ type LegacyDocumentMeta = {
   manualSignatureScale?: number;
   manualSignatureContrast?: number;
   manualSignatureBrightness?: number;
+  letterheadLogoDataUrl?: string;
+  letterheadProfileId?: string;
 };
 
 const LEGACY_META_PREFIX = "[[DOC_META:";
@@ -129,6 +133,11 @@ function buildLegacyMetaNotes(notes: string, meta: LegacyDocumentMeta) {
   const manualSignatureScale = Math.min(2.2, Math.max(0.7, Number(meta.manualSignatureScale) || 1.68));
   const manualSignatureContrast = Math.min(2.2, Math.max(0.8, Number(meta.manualSignatureContrast) || 1.45));
   const manualSignatureBrightness = Math.min(1.2, Math.max(0.6, Number(meta.manualSignatureBrightness) || 0.92));
+  const letterheadLogoDataUrlRaw = String(meta.letterheadLogoDataUrl || "").trim();
+  const letterheadLogoDataUrl = letterheadLogoDataUrlRaw.startsWith("data:image/")
+    ? letterheadLogoDataUrlRaw.slice(0, 700_000)
+    : "";
+  const letterheadProfileId = String(meta.letterheadProfileId || "").trim().slice(0, 100);
   const safeMeta = {
     discountAmount: Math.max(0, Number(meta.discountAmount) || 0),
     downPaymentPercent: Math.min(100, Math.max(0, Number(meta.downPaymentPercent) || 0)),
@@ -141,7 +150,9 @@ function buildLegacyMetaNotes(notes: string, meta: LegacyDocumentMeta) {
     manualSignatureDataUrl,
     manualSignatureScale,
     manualSignatureContrast,
-    manualSignatureBrightness
+    manualSignatureBrightness,
+    letterheadLogoDataUrl,
+    letterheadProfileId
   } satisfies Required<LegacyDocumentMeta>;
   const metaText = `${LEGACY_META_PREFIX}${JSON.stringify(safeMeta)}${LEGACY_META_SUFFIX}`;
   return baseNotes ? `${baseNotes}\n${metaText}` : metaText;
@@ -195,6 +206,11 @@ export async function POST(request: NextRequest) {
     const manualSignatureScale = Math.min(2.2, Math.max(0.7, Number(body.manualSignatureScale) || 1.68));
     const manualSignatureContrast = Math.min(2.2, Math.max(0.8, Number(body.manualSignatureContrast) || 1.45));
     const manualSignatureBrightness = Math.min(1.2, Math.max(0.6, Number(body.manualSignatureBrightness) || 0.92));
+    const letterheadLogoDataUrlRaw = String(body.letterheadLogoDataUrl || "").trim();
+    const letterheadLogoDataUrl = letterheadLogoDataUrlRaw.startsWith("data:image/")
+      ? letterheadLogoDataUrlRaw.slice(0, 700_000)
+      : "";
+    const letterheadProfileId = String(body.letterheadProfileId || "").trim().slice(0, 100);
     const markPrinted = Boolean(body.markPrinted);
 
     if (!publicToken) {
@@ -254,7 +270,9 @@ export async function POST(request: NextRequest) {
         manualSignatureDataUrl,
         manualSignatureScale,
         manualSignatureContrast,
-        manualSignatureBrightness
+        manualSignatureBrightness,
+        letterheadLogoDataUrl,
+        letterheadProfileId
       }),
       items,
       subtotal,
@@ -286,7 +304,9 @@ export async function POST(request: NextRequest) {
         manualSignatureDataUrl,
         manualSignatureScale,
         manualSignatureContrast,
-        manualSignatureBrightness
+        manualSignatureBrightness,
+        letterheadLogoDataUrl,
+        letterheadProfileId
       }),
       items,
       subtotal,

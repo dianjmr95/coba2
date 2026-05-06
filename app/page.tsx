@@ -92,6 +92,8 @@ type SalesDocumentDetailResponse = {
     manualSignatureScale?: number;
     manualSignatureContrast?: number;
     manualSignatureBrightness?: number;
+    letterheadLogoDataUrl?: string;
+    letterheadProfileId?: string;
     items: Array<{ nama: string; qty: number; harga: number }>;
     subtotal: number;
     discountAmount?: number;
@@ -229,6 +231,16 @@ type SalesRecapRow = {
   catatan: string;
 };
 
+type LetterheadProfile = {
+  id: string;
+  label: string;
+  companyName: string;
+  subtitle: string;
+  address: string;
+  phone: string;
+  logoUrl: string;
+};
+
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
 const PRICE_COMPARE_PRESET_ACTIVE = "__active__";
 const PRICE_COMPARE_PRESET_AUTO_LAPTOP = "__auto_preset_laptop__";
@@ -242,6 +254,36 @@ const ROLE_SYNC_INTERVAL_MS = 60_000;
 const ROLE_MAP_SYNC_INTERVAL_MS = 60_000;
 const REALTIME_RELOAD_DEBOUNCE_MS = 1_500;
 const DEFAULT_BANK_ACCOUNT_INFO = "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA";
+const LETTERHEAD_PROFILES: LetterheadProfile[] = [
+  {
+    id: "RJ",
+    label: "Rajawali",
+    companyName: "STARCOMP RAJAWALI",
+    subtitle: "Computer Store",
+    address: "Jl. Rajawali Raya No.37, Manukan, Condongcatur, Kec. Depok, Kabupaten Sleman, Daerah Istimewa Yogyakarta 55582",
+    phone: "08112747434",
+    logoUrl: "/starcomp-logo.png"
+  },
+  {
+    id: "JKL",
+    label: "JAKAL",
+    companyName: "STARCOMP JAKAL",
+    subtitle: "Computer Store",
+    address: "Kaliurang St No.Km 14, Tj. Manding, Umbulmartani, Ngemplak, Sleman Regency, Special Region of Yogyakarta 55584",
+    phone: "08112631352",
+    logoUrl: "/starcomp-logo.png"
+  },
+  {
+    id: "SLO",
+    label: "Solo",
+    companyName: "STARCOMP SOLO",
+    subtitle: "Computer Store",
+    address: "Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169",
+    phone: "08112642352",
+    logoUrl: "/starcomp-logo.png"
+  }
+];
+const DEFAULT_LETTERHEAD_PROFILE_ID = LETTERHEAD_PROFILES[0].id;
 const ORDER_ITEMS_FEATURE_START_DATE = "2026-04-18";
 const ENABLE_AUTO_PRICE_FETCH = String(process.env.NEXT_PUBLIC_ENABLE_AUTO_PRICE_FETCH || "").toLowerCase() === "true";
 const FIXED_ADMIN_EMAIL = "luluklisdiantoro535@gmail.com";
@@ -1386,6 +1428,7 @@ export default function Page() {
   const [invoiceManualSignatureScale, setInvoiceManualSignatureScale] = useState(1.68);
   const [invoiceManualSignatureContrast, setInvoiceManualSignatureContrast] = useState(1.45);
   const [invoiceManualSignatureBrightness, setInvoiceManualSignatureBrightness] = useState(0.92);
+  const [invoiceLetterheadProfileId, setInvoiceLetterheadProfileId] = useState(DEFAULT_LETTERHEAD_PROFILE_ID);
   const [invoiceIncludeBankAccount, setInvoiceIncludeBankAccount] = useState(true);
   const [invoiceDotMatrixMode, setInvoiceDotMatrixMode] = useState(false);
   const [invoiceIncludeSuratJalan, setInvoiceIncludeSuratJalan] = useState(true);
@@ -1465,6 +1508,12 @@ export default function Page() {
   const cancelDraftCloseTimerRef = useRef<number | null>(null);
   const invoiceDocLabel = invoiceDocType === "faktur" ? "Faktur" : "Penawaran";
   const invoiceDocUpperLabel = invoiceDocType === "faktur" ? "FAKTUR PENJUALAN" : "SURAT PENAWARAN BARANG";
+  const invoiceLetterheadProfile = useMemo(
+    () =>
+      LETTERHEAD_PROFILES.find((profile) => profile.id === invoiceLetterheadProfileId) ||
+      LETTERHEAD_PROFILES[0],
+    [invoiceLetterheadProfileId]
+  );
 
   const currentPresetData: PresetData = {
     tokopediaFee,
@@ -2289,6 +2338,7 @@ export default function Page() {
     setInvoiceManualSignatureScale(1.68);
     setInvoiceManualSignatureContrast(1.45);
     setInvoiceManualSignatureBrightness(0.92);
+    setInvoiceLetterheadProfileId(DEFAULT_LETTERHEAD_PROFILE_ID);
     setInvoiceItems([{ id: `${Date.now()}`, nama: "", qty: 1, harga: 0 }]);
     setInvoiceSaveNotice("");
   }
@@ -2517,6 +2567,7 @@ export default function Page() {
           manualSignatureScale: invoiceManualSignatureScale,
           manualSignatureContrast: invoiceManualSignatureContrast,
           manualSignatureBrightness: invoiceManualSignatureBrightness,
+          letterheadProfileId: invoiceLetterheadProfileId,
           items: normalizedItems,
           subtotal: invoiceSubtotal,
           discountAmount: invoiceDiscountValue,
@@ -2711,7 +2762,7 @@ export default function Page() {
     const totalLabel = invoiceDocType === "faktur" ? "TOTAL" : "TOTAL PENAWARAN";
 
     const text = [
-      `*${invoiceDocUpperLabel} STARCOMP SOLO*`,
+      `*${invoiceDocUpperLabel} ${invoiceLetterheadProfile.companyName}*`,
       `No ${docLabel}: ${draftNo}`,
       `Tanggal: ${printDate}`,
       ...contactLines,
@@ -2884,6 +2935,11 @@ export default function Page() {
       setInvoiceManualSignatureScale(Math.min(2.2, Math.max(0.7, Number(detail.manualSignatureScale) || 1.68)));
       setInvoiceManualSignatureContrast(Math.min(2.2, Math.max(0.8, Number(detail.manualSignatureContrast) || 1.45)));
       setInvoiceManualSignatureBrightness(Math.min(1.2, Math.max(0.6, Number(detail.manualSignatureBrightness) || 0.92)));
+      setInvoiceLetterheadProfileId(
+        LETTERHEAD_PROFILES.some((profile) => profile.id === detail.letterheadProfileId)
+          ? String(detail.letterheadProfileId)
+          : DEFAULT_LETTERHEAD_PROFILE_ID
+      );
       setInvoiceDiscountAmount(
         Math.min(
           Math.max(0, Number(detail.subtotal) || 0),
@@ -6858,6 +6914,20 @@ export default function Page() {
 
               <div id="invoice-step-3" className="grid gap-3 rounded-2xl border border-stone-200 bg-white/85 p-3">
                 <div className="flex flex-wrap items-center gap-2">
+                <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
+                  <span>Kop Toko</span>
+                  <select
+                    value={invoiceLetterheadProfileId}
+                    onChange={(e) => setInvoiceLetterheadProfileId(e.target.value)}
+                    className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-sm text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    {LETTERHEAD_PROFILES.map((profile) => (
+                      <option key={profile.id} value={profile.id}>
+                        {profile.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm text-slate-700">
                   <input
                     type="checkbox"
