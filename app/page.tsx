@@ -234,6 +234,9 @@ const NAV_VISIBILITY_STORAGE_KEY = "starcomp-nav-hidden-v1";
 const RECAP_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_RECAP_TABLE || "sales_recap";
 const PRESET_SUPABASE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_PRESET_TABLE || "potongan_presets";
 const USER_ROLE_TABLE = process.env.NEXT_PUBLIC_SUPABASE_ROLE_TABLE || "user_roles";
+const ROLE_SYNC_INTERVAL_MS = 60_000;
+const ROLE_MAP_SYNC_INTERVAL_MS = 60_000;
+const REALTIME_RELOAD_DEBOUNCE_MS = 1_500;
 const DEFAULT_BANK_ACCOUNT_INFO = "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA";
 const ORDER_ITEMS_FEATURE_START_DATE = "2026-04-18";
 const ENABLE_AUTO_PRICE_FETCH = String(process.env.NEXT_PUBLIC_ENABLE_AUTO_PRICE_FETCH || "").toLowerCase() === "true";
@@ -1852,17 +1855,20 @@ export default function Page() {
       setRoleMap({});
       return;
     }
+    if (authUser?.role !== "admin") return;
     void loadRoleMapFromSupabase();
-  }, [loadRoleMapFromSupabase, sessionUser]);
+  }, [authUser?.role, loadRoleMapFromSupabase, sessionUser]);
 
   useEffect(() => {
     if (!sessionUser) return;
+    if (authUser?.role !== "admin") return;
 
     const refreshRoles = () => {
+      if (document.visibilityState !== "visible") return;
       void loadRoleMapFromSupabase();
     };
 
-    const timer = window.setInterval(refreshRoles, 5000);
+    const timer = window.setInterval(refreshRoles, ROLE_MAP_SYNC_INTERVAL_MS);
     window.addEventListener("focus", refreshRoles);
     document.addEventListener("visibilitychange", refreshRoles);
 
@@ -1871,17 +1877,18 @@ export default function Page() {
       window.removeEventListener("focus", refreshRoles);
       document.removeEventListener("visibilitychange", refreshRoles);
     };
-  }, [loadRoleMapFromSupabase, sessionUser]);
+  }, [authUser?.role, loadRoleMapFromSupabase, sessionUser]);
 
   useEffect(() => {
     if (!sessionUser) return;
 
     const refreshCurrentRole = () => {
+      if (document.visibilityState !== "visible") return;
       void syncCurrentUserRoleFromServer();
     };
 
     void syncCurrentUserRoleFromServer();
-    const timer = window.setInterval(refreshCurrentRole, 5000);
+    const timer = window.setInterval(refreshCurrentRole, ROLE_SYNC_INTERVAL_MS);
     window.addEventListener("focus", refreshCurrentRole);
     document.addEventListener("visibilitychange", refreshCurrentRole);
 
@@ -1930,6 +1937,7 @@ export default function Page() {
 
   useEffect(() => {
     if (!authUser) return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const channel = supabase
       .channel(`preset-realtime-${PRESET_SUPABASE_TABLE}`)
       .on(
@@ -1940,12 +1948,19 @@ export default function Page() {
           table: PRESET_SUPABASE_TABLE
         },
         () => {
-          void loadPresetsFromSupabase();
+          if (debounceTimer) return;
+          debounceTimer = setTimeout(() => {
+            debounceTimer = null;
+            void loadPresetsFromSupabase();
+          }, REALTIME_RELOAD_DEBOUNCE_MS);
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
       void supabase.removeChannel(channel);
     };
   }, [authUser, loadPresetsFromSupabase]);
@@ -1958,6 +1973,7 @@ export default function Page() {
   useEffect(() => {
     if (!authUser) return;
     if (activeSection !== "rekap-penjualan") return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const channel = supabase
       .channel(`recap-realtime-${RECAP_SUPABASE_TABLE}`)
@@ -1969,12 +1985,19 @@ export default function Page() {
           table: RECAP_SUPABASE_TABLE
         },
         () => {
-          void loadRecapRows();
+          if (debounceTimer) return;
+          debounceTimer = setTimeout(() => {
+            debounceTimer = null;
+            void loadRecapRows();
+          }, REALTIME_RELOAD_DEBOUNCE_MS);
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
       void supabase.removeChannel(channel);
     };
   }, [activeSection, authUser, loadRecapRows]);
@@ -1988,6 +2011,7 @@ export default function Page() {
   useEffect(() => {
     if (!authUser) return;
     if (activeSection !== "pembuatan-nota") return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const channel = supabase
       .channel("sales-documents-realtime")
@@ -1999,12 +2023,19 @@ export default function Page() {
           table: "sales_documents"
         },
         () => {
-          void loadInvoiceHistory();
+          if (debounceTimer) return;
+          debounceTimer = setTimeout(() => {
+            debounceTimer = null;
+            void loadInvoiceHistory();
+          }, REALTIME_RELOAD_DEBOUNCE_MS);
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
       void supabase.removeChannel(channel);
     };
   }, [activeSection, authUser, loadInvoiceHistory]);
