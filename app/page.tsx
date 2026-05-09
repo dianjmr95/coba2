@@ -1148,7 +1148,7 @@ function calcTokopedia(
   const admin = percent(harga, fee);
   const gratisOngkirCfg = parseTokopediaGratisOngkir(tokopediaGratisOngkirMode);
   const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
-  const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
+  const affiliate = enabledAffiliate ? percent(harga, affiliatePct) : 0;
   const total = admin + biayaProses + biayaFix + gratisOngkir + affiliate;
 
   const rincian: RincianItem[] = [
@@ -1179,7 +1179,7 @@ function calcShopee(
   const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
   const promo = enabledPromo ? cap(percent(harga, 4.5), 60000) : 0;
   const asuransi = enabledAsuransi ? percent(harga, 0.5) : 0;
-  const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
+  const affiliate = enabledAffiliate ? percent(harga, affiliatePct) : 0;
   const total = admin + biayaProses + biayaTambahan + gratisOngkir + promo + asuransi + affiliate;
 
   const rincian: RincianItem[] = [
@@ -1210,7 +1210,7 @@ function calcMall(
   const biayaJasa = enabledBiayaJasa ? cap(percent(harga, 1.8), 50000) : 0;
   const gratisOngkirCfg = parseTokopediaGratisOngkir(mallGratisOngkirMode);
   const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
-  const affiliate = enabledAffiliate ? cap(percent(harga, affiliatePct), 50000) : 0;
+  const affiliate = enabledAffiliate ? percent(harga, affiliatePct) : 0;
   const total = admin + biayaProses + biayaFix + biayaJasa + gratisOngkir + affiliate;
 
   const rincian: RincianItem[] = [
