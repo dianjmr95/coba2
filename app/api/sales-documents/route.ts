@@ -32,6 +32,7 @@ type SalesDocumentRequest = {
   taxAmount?: number;
   grandTotal?: number;
   downPaymentPercent?: number;
+  downPaymentAmount?: number;
   manualSignatureDataUrl?: string;
   manualSignatureScale?: number;
   manualSignatureContrast?: number;
@@ -44,6 +45,7 @@ type SalesDocumentRequest = {
 type LegacyDocumentMeta = {
   discountAmount?: number;
   downPaymentPercent?: number;
+  downPaymentAmount?: number;
   taxEnabled?: boolean;
   taxMode?: "exclude" | "include";
   taxRate?: number;
@@ -141,6 +143,7 @@ function buildLegacyMetaNotes(notes: string, meta: LegacyDocumentMeta) {
   const safeMeta = {
     discountAmount: Math.max(0, Number(meta.discountAmount) || 0),
     downPaymentPercent: Math.min(100, Math.max(0, Number(meta.downPaymentPercent) || 0)),
+    downPaymentAmount: Math.max(0, Number(meta.downPaymentAmount) || 0),
     taxEnabled: Boolean(meta.taxEnabled),
     taxMode: meta.taxMode === "include" ? "include" : "exclude",
     taxRate: Math.max(0, Number(meta.taxRate) || 0),
@@ -198,6 +201,10 @@ export async function POST(request: NextRequest) {
     const grandTotal = Math.max(
       0,
       Math.round(Number(body.grandTotal) || discountedSubtotal + taxAmount)
+    );
+    const downPaymentAmount = Math.min(
+      grandTotal,
+      Math.max(0, Math.round(Number(body.downPaymentAmount) || Math.round((grandTotal * downPaymentPercent) / 100)))
     );
     const manualSignatureDataUrlRaw = String(body.manualSignatureDataUrl || "").trim();
     const manualSignatureDataUrl = manualSignatureDataUrlRaw.startsWith("data:image/")
@@ -261,6 +268,7 @@ export async function POST(request: NextRequest) {
       notes: buildLegacyMetaNotes(String(body.notes || "").trim(), {
         discountAmount,
         downPaymentPercent,
+        downPaymentAmount,
         taxEnabled,
         taxMode,
         taxRate,
@@ -295,6 +303,7 @@ export async function POST(request: NextRequest) {
       notes: buildLegacyMetaNotes(String(body.notes || "").trim(), {
         discountAmount,
         downPaymentPercent,
+        downPaymentAmount,
         taxEnabled,
         taxMode,
         taxRate,

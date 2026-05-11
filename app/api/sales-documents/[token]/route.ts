@@ -38,6 +38,7 @@ type SalesDocumentItem = {
 type LegacyDocumentMeta = {
   discountAmount?: number;
   downPaymentPercent?: number;
+  downPaymentAmount?: number;
   taxEnabled?: boolean;
   taxMode?: "exclude" | "include";
   taxRate?: number;
@@ -202,9 +203,15 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         : inferredTaxEnabledBase && Math.abs(grandTotalRaw - subtotal) <= 1 && taxAmountRaw > 0
           ? "include"
           : "exclude";
+    const hasDiscountAmountInData =
+      data.discount_amount !== null &&
+      data.discount_amount !== undefined &&
+      String(data.discount_amount).trim() !== "";
     const discountAmountFromColumn = Math.min(
       subtotal,
-      Math.max(0, Number(data.discount_amount) || Math.max(0, Number(legacyMeta?.discountAmount) || 0))
+      hasDiscountAmountInData
+        ? Math.max(0, Number(data.discount_amount) || 0)
+        : Math.max(0, Number(legacyMeta?.discountAmount) || 0)
     );
     const inferredDiscountFromTotals = Math.max(
       0,
@@ -216,11 +223,15 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
     );
     const discountAmount = Math.min(
       subtotal,
-      discountAmountFromColumn > 0 ? discountAmountFromColumn : inferredDiscountFromTotals
+      hasDiscountAmountInData || discountAmountFromColumn > 0 ? discountAmountFromColumn : inferredDiscountFromTotals
     );
     const downPaymentPercent = Math.min(
       100,
       Math.max(0, Number(data.down_payment_percent) || Math.max(0, Number(legacyMeta?.downPaymentPercent) || 0))
+    );
+    const downPaymentAmount = Math.min(
+      grandTotalRaw,
+      Math.max(0, Number(legacyMeta?.downPaymentAmount) || Math.round((grandTotalRaw * downPaymentPercent) / 100))
     );
     const subtotalAfterDiscount = Math.max(0, subtotal - discountAmount);
     const inferredTaxEnabled = inferredTaxEnabledBase;
@@ -262,6 +273,7 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ to
         subtotal,
         discountAmount,
         downPaymentPercent,
+        downPaymentAmount,
         taxEnabled: inferredTaxEnabled,
         taxMode: inferredTaxMode,
         taxRate,

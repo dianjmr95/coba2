@@ -98,6 +98,7 @@ type SalesDocumentDetailResponse = {
     subtotal: number;
     discountAmount?: number;
     downPaymentPercent?: number;
+    downPaymentAmount?: number;
     taxEnabled: boolean;
     taxRate: number;
     taxAmount: number;
@@ -2582,6 +2583,7 @@ export default function Page() {
           subtotal: invoiceSubtotal,
           discountAmount: invoiceDiscountValue,
           downPaymentPercent: isFakturDocContext ? invoiceDownPaymentPercentValue : 0,
+          downPaymentAmount: isFakturDocContext ? invoiceDownPaymentAmount : 0,
           taxEnabled: invoiceTaxEnabled,
           taxMode: invoiceTaxMode,
           taxRate: invoiceTaxRate,
@@ -2635,6 +2637,7 @@ export default function Page() {
       includeTaxAmount: String(invoiceTaxEnabled ? invoiceTaxAmount : 0),
       includeDiscountAmount: String(invoiceDiscountValue),
       includeDpPercent: String(isFakturDocContext ? invoiceDownPaymentPercentValue : 0),
+      includeDpAmount: String(isFakturDocContext ? invoiceDownPaymentAmount : 0),
       includeSJ: invoiceIncludeSuratJalan ? "1" : "0",
       includeBAST: invoiceIncludeBast ? "1" : "0"
     });
@@ -2706,6 +2709,7 @@ export default function Page() {
       includeTaxAmount: String(invoiceTaxAmount),
       includeDiscountAmount: String(invoiceDiscountValue),
       includeDpPercent: String(isFakturDocContext ? invoiceDownPaymentPercentValue : 0),
+      includeDpAmount: String(isFakturDocContext ? invoiceDownPaymentAmount : 0),
       includeSJ: invoiceIncludeSuratJalan ? "1" : "0",
       includeBAST: invoiceIncludeBast ? "1" : "0"
     });
@@ -3013,6 +3017,7 @@ export default function Page() {
     let includeTaxAmount = String(invoiceTaxEnabled ? invoiceTaxAmount : 0);
     let includeDiscountAmount = String(invoiceDiscountValue);
     let includeDpPercent = String(isFakturDocContext ? invoiceDownPaymentPercentValue : 0);
+    let includeDpAmount = String(isFakturDocContext ? invoiceDownPaymentAmount : 0);
     try {
       const response = await fetch(`/api/sales-documents/${publicToken}`);
       const payload = (await response.json()) as SalesDocumentDetailResponse;
@@ -3026,6 +3031,10 @@ export default function Page() {
         const detailTaxAmount = Math.max(0, Number(detail.taxAmount) || 0);
         const detailGrandTotal = Math.max(0, Number(detail.grandTotal) || 0);
         const detailDpPercent = Math.min(100, Math.max(0, parseFlexiblePercent(detail.downPaymentPercent)));
+        const detailDpAmount = Math.min(
+          detailGrandTotal,
+          Math.max(0, Number(detail.downPaymentAmount) || Math.round((detailGrandTotal * detailDpPercent) / 100))
+        );
         const discountFromData = Math.min(subtotal, Math.max(0, Number(detail.discountAmount) || 0));
         const inferredDiscountFromTotals = Math.max(
           0,
@@ -3045,6 +3054,7 @@ export default function Page() {
         includeTaxRate = String(detailTaxRate);
         includeDiscountAmount = String(discount);
         includeDpPercent = String(detailDocType === "faktur" ? detailDpPercent : 0);
+        includeDpAmount = String(detailDocType === "faktur" ? detailDpAmount : 0);
         if (detailTaxEnabled) {
           const computedTax =
             detailTaxMode === "include"
@@ -3069,6 +3079,7 @@ export default function Page() {
       includeTaxAmount,
       includeDiscountAmount,
       includeDpPercent,
+      includeDpAmount,
       includeSJ: invoiceIncludeSuratJalan ? "1" : "0",
       includeBAST: invoiceIncludeBast ? "1" : "0"
     });

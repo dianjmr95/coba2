@@ -68,6 +68,7 @@ type DocumentRow = {
 type LegacyDocumentMeta = {
   discountAmount?: number;
   downPaymentPercent?: number;
+  downPaymentAmount?: number;
   taxEnabled?: boolean;
   taxMode?: "exclude" | "include";
   taxRate?: number;
@@ -171,6 +172,7 @@ export default async function DokumenPage({
     includeTaxRate?: string;
     includeDiscountAmount?: string;
     includeDpPercent?: string;
+    includeDpAmount?: string;
     includeSJ?: string;
     includeBAST?: string;
   }>;
@@ -199,6 +201,9 @@ export default async function DokumenPage({
   const includeDpPercentParamRaw = String(query?.includeDpPercent || "").trim();
   const includeDpPercentParsed = Number(includeDpPercentParamRaw);
   const hasDpPercentOverride = Number.isFinite(includeDpPercentParsed) && includeDpPercentParsed >= 0;
+  const includeDpAmountParamRaw = String(query?.includeDpAmount || "").trim();
+  const includeDpAmountParsed = Number(includeDpAmountParamRaw);
+  const hasDpAmountOverride = Number.isFinite(includeDpAmountParsed) && includeDpAmountParsed >= 0;
   const includeTaxRateParamRaw = String(query?.includeTaxRate || "").trim();
   const includeTaxRateParsed = Number(includeTaxRateParamRaw);
   const hasTaxRateOverride = Number.isFinite(includeTaxRateParsed) && includeTaxRateParsed > 0;
@@ -336,9 +341,15 @@ export default async function DokumenPage({
       : taxEnabledFromData && Math.abs(grandTotalRaw - subtotal) <= 1 && (taxAmountRaw > 0 || inferredTaxFromTotals)
         ? "include"
         : "exclude";
+  const hasDiscountAmountInData =
+    data.discount_amount !== null &&
+    data.discount_amount !== undefined &&
+    String(data.discount_amount).trim() !== "";
   const discountAmountFromData = Math.min(
     subtotal,
-    Math.max(0, Number(data.discount_amount) || Math.max(0, Number(legacyMeta?.discountAmount) || 0))
+    hasDiscountAmountInData
+      ? Math.max(0, Number(data.discount_amount) || 0)
+      : Math.max(0, Number(legacyMeta?.discountAmount) || 0)
   );
   const inferredDiscountFromTotals = Math.max(
     0,
@@ -352,7 +363,7 @@ export default async function DokumenPage({
     subtotal,
     hasDiscountAmountOverride
       ? Math.max(0, includeDiscountAmountParsed)
-      : discountAmountFromData > 0
+      : hasDiscountAmountInData || discountAmountFromData > 0
         ? discountAmountFromData
         : inferredDiscountFromTotals
   );
@@ -392,7 +403,16 @@ export default async function DokumenPage({
       ? Math.max(0, includeDpPercentParsed)
       : Math.max(0, Number(data.down_payment_percent) || Math.max(0, Number(legacyMeta?.downPaymentPercent) || 0))
   );
-  const downPaymentAmount = Math.round((total * downPaymentPercent) / 100);
+  const downPaymentAmountFromMeta = Math.max(0, Number(legacyMeta?.downPaymentAmount) || 0);
+  const downPaymentAmount = Math.min(
+    total,
+    hasDpAmountOverride
+      ? Math.round(Math.max(0, includeDpAmountParsed))
+      : downPaymentAmountFromMeta > 0
+        ? Math.round(downPaymentAmountFromMeta)
+        : Math.round((total * downPaymentPercent) / 100)
+  );
+  const downPaymentPercentDisplay = total > 0 ? (downPaymentAmount / total) * 100 : downPaymentPercent;
   const remainingAmount = Math.max(0, total - downPaymentAmount);
   const taxTermsLine =
     taxMode === "include"
@@ -598,10 +618,10 @@ export default async function DokumenPage({
         <div className="total">
           {totalLabel}: {rupiah(total)}
         </div>
-        {!isPenawaran && downPaymentPercent > 0 ? (
+        {!isPenawaran && downPaymentAmount > 0 ? (
           <div className="mt-1 grid gap-1 text-xs text-slate-700">
             <div className="flex justify-end gap-2">
-              <span>DP Dibayar ({formatPercent(downPaymentPercent)}%)</span>
+              <span>DP Dibayar ({formatPercent(downPaymentPercentDisplay)}%)</span>
               <strong>{rupiah(downPaymentAmount)}</strong>
             </div>
             <div className="flex justify-end gap-2">
