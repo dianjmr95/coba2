@@ -1420,7 +1420,9 @@ export default function Page() {
   const [invoiceWhatsappLocalNumber, setInvoiceWhatsappLocalNumber] = useState("");
   const [invoiceWhatsapp, setInvoiceWhatsapp] = useState("");
   const [invoiceDiscountAmount, setInvoiceDiscountAmount] = useState(0);
+  const [invoiceDownPaymentInputMode, setInvoiceDownPaymentInputMode] = useState<"percent" | "amount">("percent");
   const [invoiceDownPaymentPercent, setInvoiceDownPaymentPercent] = useState(0);
+  const [invoiceDownPaymentAmountInput, setInvoiceDownPaymentAmountInput] = useState(0);
   const [invoiceTaxEnabled, setInvoiceTaxEnabled] = useState(false);
   const [invoiceTaxMode, setInvoiceTaxMode] = useState<InvoiceTaxMode>("exclude");
   const [invoiceIncludeSignAndStamp, setInvoiceIncludeSignAndStamp] = useState(true);
@@ -2423,12 +2425,20 @@ export default function Page() {
     [invoiceDocType, invoiceNo]
   );
   const invoiceDownPaymentPercentValue = useMemo(
-    () => Math.round(Math.min(100, Math.max(0, Number(invoiceDownPaymentPercent) || 0)) * 100) / 100,
-    [invoiceDownPaymentPercent]
+    () =>
+      invoiceDownPaymentInputMode === "amount"
+        ? invoiceGrandTotal > 0
+          ? Math.round((Math.min(invoiceGrandTotal, Math.max(0, Number(invoiceDownPaymentAmountInput) || 0)) / invoiceGrandTotal) * 10000) / 100
+          : 0
+        : Math.round(Math.min(100, Math.max(0, Number(invoiceDownPaymentPercent) || 0)) * 100) / 100,
+    [invoiceDownPaymentAmountInput, invoiceDownPaymentInputMode, invoiceDownPaymentPercent, invoiceGrandTotal]
   );
   const invoiceDownPaymentAmount = useMemo(
-    () => Math.round((invoiceGrandTotal * invoiceDownPaymentPercentValue) / 100),
-    [invoiceGrandTotal, invoiceDownPaymentPercentValue]
+    () =>
+      invoiceDownPaymentInputMode === "amount"
+        ? Math.round(Math.min(invoiceGrandTotal, Math.max(0, Number(invoiceDownPaymentAmountInput) || 0)))
+        : Math.round((invoiceGrandTotal * invoiceDownPaymentPercentValue) / 100),
+    [invoiceDownPaymentAmountInput, invoiceDownPaymentInputMode, invoiceGrandTotal, invoiceDownPaymentPercentValue]
   );
   const invoiceRemainingAmount = useMemo(
     () => Math.max(0, invoiceGrandTotal - invoiceDownPaymentAmount),
@@ -2949,7 +2959,9 @@ export default function Page() {
       const nextDocType = resolveInvoiceDocType(detail.documentType, detail.documentNo);
       const detailDpPercent = Math.min(100, Math.max(0, parseFlexiblePercent(detail.downPaymentPercent)));
       setInvoiceDocType(nextDocType);
+      setInvoiceDownPaymentInputMode("percent");
       setInvoiceDownPaymentPercent(nextDocType === "faktur" ? detailDpPercent : 0);
+      setInvoiceDownPaymentAmountInput(0);
       setInvoiceTaxEnabled(Boolean(detail.taxEnabled));
       const detailTaxMode =
         detail.taxMode === "include" || detail.taxMode === "exclude"
@@ -6846,21 +6858,55 @@ export default function Page() {
                     />
                   </label>
                   <label className="grid gap-1 rounded-xl border border-sky-200 bg-sky-50/60 p-2">
-                    <span>DP Dibayar (%)</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={0.01}
-                      value={invoiceDownPaymentPercent}
+                    <span>DP Dibayar</span>
+                    <select
+                      value={invoiceDownPaymentInputMode}
                       disabled={!isFakturDocContext}
-                      onChange={(e) =>
-                        setInvoiceDownPaymentPercent(
-                          Math.min(100, Math.max(0, Number(e.target.value || 0)))
-                        )
-                      }
-                      className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-500"
-                    />
+                      onChange={(e) => {
+                        const nextMode = e.target.value === "amount" ? "amount" : "percent";
+                        if (nextMode === "amount") {
+                          setInvoiceDownPaymentAmountInput(invoiceDownPaymentAmount);
+                        } else {
+                          setInvoiceDownPaymentPercent(invoiceDownPaymentPercentValue);
+                        }
+                        setInvoiceDownPaymentInputMode(nextMode);
+                      }}
+                      className="rounded-xl border border-stone-200 px-2 py-2 text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-500"
+                    >
+                      <option value="percent">Input Persen (%)</option>
+                      <option value="amount">Input Nominal (Rp)</option>
+                    </select>
+                    {invoiceDownPaymentInputMode === "amount" ? (
+                      <input
+                        type="number"
+                        min={0}
+                        max={Math.max(0, Math.round(invoiceGrandTotal))}
+                        step={1}
+                        value={invoiceDownPaymentAmountInput}
+                        disabled={!isFakturDocContext}
+                        onChange={(e) =>
+                          setInvoiceDownPaymentAmountInput(
+                            Math.min(Math.max(0, Number(e.target.value || 0)), Math.max(0, Math.round(invoiceGrandTotal)))
+                          )
+                        }
+                        className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-500"
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        step={0.01}
+                        value={invoiceDownPaymentPercent}
+                        disabled={!isFakturDocContext}
+                        onChange={(e) =>
+                          setInvoiceDownPaymentPercent(
+                            Math.min(100, Math.max(0, Number(e.target.value || 0)))
+                          )
+                        }
+                        className="rounded-xl border border-stone-200 px-2 py-2 text-right text-sm outline-none focus:border-stone-300 focus:ring-2 focus:ring-stone-200 disabled:cursor-not-allowed disabled:bg-stone-100 disabled:text-slate-500"
+                      />
+                    )}
                     {!isFakturDocContext ? (
                       <span className="text-xs text-slate-500">DP hanya untuk dokumen faktur.</span>
                     ) : null}
