@@ -444,35 +444,35 @@ export default async function DokumenPage({
           @media print {
             @page { size: A4; margin: 12mm; }
             * { color: #000 !important; text-shadow: none !important; }
-            .sheet { font-size: 12px !important; }
+            .sheet { font-size: 14px !important; }
           }
           .sheet .header { display: flex; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
           .sheet .company { width: 50%; padding-right: 8px; }
           .sheet .logo-wrap { width: 50%; display: flex; justify-content: flex-end; }
           .sheet .logo { width: 220px; max-width: 100%; height: auto; object-fit: contain; }
           .sheet .company h1 { margin: 0; font-size: 28px; letter-spacing: 0.015em; line-height: 1.02; }
-          .sheet .company p { margin: 1px 0 0; color: #222; font-size: 10px; line-height: 1.25; }
-          .sheet .company .address { margin-top: 2px; font-size: 9px; line-height: 1.3; max-width: 500px; color: #333; }
-          .sheet .title { margin: 10px 0 8px; text-align: center; font-size: 20px; font-weight: 700; letter-spacing: 0.11em; }
+          .sheet .company p { margin: 1px 0 0; color: #222; font-size: 12px; line-height: 1.25; }
+          .sheet .company .address { margin-top: 2px; font-size: 11px; line-height: 1.3; max-width: 500px; color: #333; }
+          .sheet .title { margin: 10px 0 8px; text-align: center; font-size: 22px; font-weight: 700; letter-spacing: 0.11em; }
           .sheet .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
           .sheet .meta.single { grid-template-columns: 1fr; }
           .sheet .box { border: 1.5px solid #000; border-radius: 3px; padding: 8px; min-height: 68px; }
-          .sheet .box p { margin: 0 0 3px; font-size: 10px; }
+          .sheet .box p { margin: 0 0 3px; font-size: 12px; }
           .sheet .doc-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
-          .sheet .doc-table th, .sheet .doc-table td { border: 1.5px solid #000; padding: 6px; font-size: 11px; }
+          .sheet .doc-table th, .sheet .doc-table td { border: 1.5px solid #000; padding: 6px; font-size: 13px; }
           .sheet .doc-table th { background: #fff; font-weight: 700; }
           .sheet .right { text-align: right; }
-          .sheet .total { margin-top: 8px; display: flex; justify-content: flex-end; font-size: 14px; font-weight: 700; }
-          .sheet .notes { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; min-height: 42px; font-size: 10px; }
-          .sheet .terms { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.5; }
+          .sheet .total { margin-top: 8px; display: flex; justify-content: flex-end; font-size: 16px; font-weight: 700; }
+          .sheet .notes { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; min-height: 42px; font-size: 12px; }
+          .sheet .terms { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; font-size: 12px; line-height: 1.5; }
           .sheet .terms-title { font-weight: 700; margin-bottom: 4px; }
           .sheet .terms-list { margin: 0; padding-left: 16px; }
           .sheet .terms-closing { margin-top: 8px; }
-          .sheet .bank-section { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; font-size: 10px; line-height: 1.45; }
+          .sheet .bank-section { margin-top: 8px; border: 1.5px solid #000; border-radius: 3px; padding: 8px; font-size: 12px; line-height: 1.45; }
           .sheet .bank-box { margin-top: 8px; border-top: 1.5px dashed #000; padding-top: 6px; line-height: 1.45; }
           .sheet .bank-label { font-weight: 700; }
           .sheet .sign { margin-top: 30px; display: flex; justify-content: flex-end; }
-          .sheet .sign-box { width: 180px; text-align: center; font-size: 10px; position: relative; }
+          .sheet .sign-box { width: 180px; text-align: center; font-size: 12px; position: relative; }
           .sheet .sign-space { height: 74px; position: relative; }
           .sheet .sign-space.no-visual { height: 74px; }
           .sheet .stamp { position: absolute; left: 50%; top: 2px; width: 132px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 1; }
@@ -485,7 +485,7 @@ export default async function DokumenPage({
           }
           .sheet .page-break { break-before: page; page-break-before: always; margin-top: 20px; }
           .sheet .delivery-sign { margin-top: 26px; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
-          .sheet .delivery-sign-box { text-align: center; font-size: 10px; }
+          .sheet .delivery-sign-box { text-align: center; font-size: 12px; }
           .sheet .delivery-sign-space { height: 82px; position: relative; }
           .sheet .delivery-sign-space.no-visual { height: 82px; }
           .sheet .delivery-stamp { position: absolute; left: 50%; top: 6px; width: 126px; transform: translateX(-50%) rotate(-14deg); opacity: 0.24; z-index: 1; }
