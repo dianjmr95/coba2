@@ -442,9 +442,83 @@ export default async function DokumenPage({
         `}</style>
         <style>{`
           @media print {
-            @page { size: A4; margin: 12mm; }
+            @page { size: 11in 8.5in; margin: 10mm; }
             * { color: #000 !important; text-shadow: none !important; }
-            .sheet { font-size: 14px !important; }
+            .sheet { font-size: 12px !important; }
+            p, li { orphans: 3; widows: 3; }
+            .overflow-x-auto { overflow: visible !important; }
+            .sheet table { table-layout: fixed; width: 100%; page-break-inside: auto; }
+            .sheet thead { display: table-header-group; }
+            .sheet tfoot { display: table-footer-group; }
+            .sheet tbody { break-inside: auto; page-break-inside: auto; }
+            .sheet tr { break-inside: avoid; page-break-inside: avoid; }
+            .sheet td, .sheet th {
+              overflow-wrap: anywhere;
+              word-break: break-word;
+              vertical-align: top;
+            }
+            .sheet .header { padding-bottom: 6px; margin-bottom: 8px; }
+            .sheet .logo { width: 190px; }
+            .sheet .company h1 { font-size: 24px; }
+            .sheet .company p { font-size: 11px; line-height: 1.2; }
+            .sheet .company .address { font-size: 10px; line-height: 1.2; }
+            .sheet .title { margin: 8px 0 6px; font-size: 19px; letter-spacing: 0.08em; }
+            .sheet .meta { gap: 6px; margin-bottom: 6px; }
+            .sheet .box { padding: 6px; min-height: 58px; }
+            .sheet .box p { margin: 0 0 2px; font-size: 11px; }
+            .sheet .doc-table th, .sheet .doc-table td { padding: 4px 5px; font-size: 11px; }
+            .sheet .doc-table th:nth-child(1), .sheet .doc-table td:nth-child(1) { width: 34px; }
+            .sheet .doc-table th:nth-child(3), .sheet .doc-table td:nth-child(3) { width: 54px; }
+            .sheet .doc-table th:nth-child(4), .sheet .doc-table td:nth-child(4) { width: 118px; }
+            .sheet .doc-table th:nth-child(5), .sheet .doc-table td:nth-child(5) { width: 126px; }
+            .sheet .total { margin-top: 6px; font-size: 14px; }
+            .sheet .notes,
+            .sheet .terms,
+            .sheet .bank-section { margin-top: 6px; padding: 6px; font-size: 11px; line-height: 1.35; }
+            .sheet .notes,
+            .sheet .terms,
+            .sheet .bank-section,
+            .sheet .sign,
+            .sheet .delivery-sign { break-inside: avoid; page-break-inside: avoid; }
+            .sheet .bank-box { margin-top: 6px; padding-top: 5px; }
+            .sheet .sign { margin-top: 18px; }
+            .sheet .sign-space,
+            .sheet .sign-space.no-visual { height: 64px; }
+            .sheet .page-break { margin-top: 12px; }
+            .sheet .delivery-sign { margin-top: 18px; gap: 20px; }
+            .sheet .delivery-sign-space,
+            .sheet .delivery-sign-space.no-visual { height: 70px; }
+            .sheet .doc-table th,
+            .sheet .doc-table td,
+            .sheet .box,
+            .sheet .notes,
+            .sheet .terms,
+            .sheet .bank-section { border-width: 1px; }
+
+            html.print-density-compact .sheet { font-size: 11px !important; }
+            html.print-density-compact .sheet .logo { width: 170px; }
+            html.print-density-compact .sheet .company h1 { font-size: 21px; }
+            html.print-density-compact .sheet .company p { font-size: 10px; }
+            html.print-density-compact .sheet .company .address { font-size: 9px; }
+            html.print-density-compact .sheet .title { margin: 6px 0 5px; font-size: 17px; }
+            html.print-density-compact .sheet .box { padding: 5px; min-height: 52px; }
+            html.print-density-compact .sheet .box p { font-size: 10px; margin-bottom: 1px; }
+            html.print-density-compact .sheet .doc-table th,
+            html.print-density-compact .sheet .doc-table td { padding: 3px 4px; font-size: 10px; }
+            html.print-density-compact .sheet .doc-table th:nth-child(4),
+            html.print-density-compact .sheet .doc-table td:nth-child(4) { width: 108px; }
+            html.print-density-compact .sheet .doc-table th:nth-child(5),
+            html.print-density-compact .sheet .doc-table td:nth-child(5) { width: 114px; }
+            html.print-density-compact .sheet .total { margin-top: 4px; font-size: 13px; }
+            html.print-density-compact .sheet .notes,
+            html.print-density-compact .sheet .terms,
+            html.print-density-compact .sheet .bank-section { margin-top: 5px; padding: 5px; font-size: 10px; line-height: 1.3; }
+            html.print-density-compact .sheet .sign { margin-top: 14px; }
+            html.print-density-compact .sheet .sign-space,
+            html.print-density-compact .sheet .sign-space.no-visual { height: 56px; }
+            html.print-density-compact .sheet .delivery-sign { margin-top: 14px; gap: 16px; }
+            html.print-density-compact .sheet .delivery-sign-space,
+            html.print-density-compact .sheet .delivery-sign-space.no-visual { height: 62px; }
           }
           .sheet .header { display: flex; align-items: center; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 10px; }
           .sheet .company { width: 50%; padding-right: 8px; }

@@ -4432,7 +4432,7 @@ export default function Page() {
         <meta charset="utf-8" />
         <title>Laporan Rekap Penjualan ${reportNo}</title>
         <style>
-          @page { size: A4 landscape; margin: 12mm; }
+          @page { size: 11in 8.5in; margin: 10mm; }
           body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 11px; }
           .sheet { width: 100%; }
           .header { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #111; padding-bottom: 8px; margin-bottom: 8px; }
