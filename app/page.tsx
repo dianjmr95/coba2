@@ -182,6 +182,13 @@ type PriceCompareRow = {
   difference?: number;
   similarityScore: number;
   status: PriceCompareStatus;
+  unmatchedReason?: string;
+  toleranceApplied?: boolean;
+  topCandidates?: Array<{
+    productName: string;
+    price: number;
+    similarityScore: number;
+  }>;
 };
 type PriceCompareApiResponse = {
   ok: boolean;
@@ -1357,6 +1364,8 @@ export default function Page() {
   const [priceCompareRows, setPriceCompareRows] = useState<PriceCompareRow[]>([]);
   const [priceCompareNotice, setPriceCompareNotice] = useState("");
   const [priceCompareSummary, setPriceCompareSummary] = useState<PriceCompareSummary | null>(null);
+  const [priceCompareMode, setPriceCompareMode] = useState<"normal" | "strict">("normal");
+  const [priceCompareToleranceNominal, setPriceCompareToleranceNominal] = useState(0);
   const [priceComparePresetId, setPriceComparePresetId] = useState<string>(PRICE_COMPARE_PRESET_AUTO_LAPTOP);
   const [priceCompareFilterQuery, setPriceCompareFilterQuery] = useState("");
   const [priceCompareFilterStatus, setPriceCompareFilterStatus] = useState<"semua" | PriceCompareStatus>("semua");
@@ -3422,6 +3431,8 @@ export default function Page() {
       const formData = new FormData();
       formData.append("today_file", todayPriceListFile);
       formData.append("previous_file", previousPriceListFile);
+      formData.append("compare_mode", priceCompareMode);
+      formData.append("tolerance_nominal", String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))));
 
       const response = await fetch("/api/price-compare", {
         method: "POST",
@@ -3444,7 +3455,7 @@ export default function Page() {
       setPriceCompareSummary(summary);
       setPriceCompareNotice(
         summary
-          ? `Perbandingan selesai: ${summary.matchedRows}/${summary.totalRows} produk berhasil dicocokkan.`
+          ? `Perbandingan selesai: ${summary.matchedRows}/${summary.totalRows} produk berhasil dicocokkan (mode ${priceCompareMode === "strict" ? "strict" : "normal"}, toleransi ${rupiah(Math.max(0, Math.round(priceCompareToleranceNominal || 0)))}).`
           : "Perbandingan selesai."
       );
     } catch (error) {
@@ -3537,7 +3548,10 @@ export default function Page() {
         { header: "Harga Final Shopee", key: "finalPriceShopee", width: 18 },
         { header: "Harga Final Mall", key: "finalPriceMall", width: 18 },
         { header: "Harga Final Dipakai", key: "finalPrice", width: 18 },
-        { header: "Sumber Perhitungan", key: "sourceLabel", width: 20 }
+        { header: "Sumber Perhitungan", key: "sourceLabel", width: 20 },
+        { header: "Alasan Tidak Match", key: "unmatchedReason", width: 34 },
+        { header: "Top Kandidat Match", key: "topCandidates", width: 60 },
+        { header: "Dalam Toleransi", key: "toleranceApplied", width: 16 }
       ];
 
       compareSheet.getRow(1).font = { bold: true };
@@ -3577,7 +3591,14 @@ export default function Page() {
           finalPriceShopee: hasManualFinalShopee && Number.isFinite(finalPriceShopee) && finalPriceShopee > 0 ? finalPriceShopee : "",
           finalPriceMall: hasManualFinalMall && Number.isFinite(finalPriceMall) && finalPriceMall > 0 ? finalPriceMall : "",
           finalPrice: hasManualFinalSelectedMarketplace && Number.isFinite(finalPrice) && finalPrice > 0 ? finalPrice : "",
-          sourceLabel
+          sourceLabel,
+          unmatchedReason: row.matched ? "" : row.unmatchedReason || "",
+          topCandidates: row.matched
+            ? ""
+            : (row.topCandidates ?? [])
+                .map((candidate) => `${candidate.productName} | ${rupiah(candidate.price)} | skor ${candidate.similarityScore}`)
+                .join(" || "),
+          toleranceApplied: row.toleranceApplied ? "Ya" : ""
         });
 
         const statusFill = getStatusFill(row.status);
@@ -3608,10 +3629,13 @@ export default function Page() {
       const summaryRows = [
         { metric: "Waktu Export", value: new Date().toLocaleString("id-ID") },
         { metric: "Preset Perhitungan", value: priceComparePresetResolved.label },
+        { metric: "Mode Compare", value: priceCompareMode === "strict" ? "Strict" : "Normal" },
+        { metric: "Toleransi Selisih (Rp)", value: Math.max(0, Math.round(priceCompareToleranceNominal || 0)) },
         { metric: "Target Margin (%)", value: targetMargin },
         { metric: "Total Baris", value: priceCompareSummary?.totalRows ?? priceCompareRowsWithCalc.length },
         { metric: "Berhasil Match", value: priceCompareSummary?.matchedRows ?? 0 },
         { metric: "Baris Manual Override Shopee/Mall", value: priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length },
+        { metric: "Baris Kena Toleransi", value: priceCompareRowsWithCalc.filter((item) => item.row.toleranceApplied).length },
         { metric: "Hari Ini Lebih Murah", value: priceCompareSummary?.todayCheaperCount ?? 0 },
         { metric: "Sebelumnya Lebih Murah", value: priceCompareSummary?.previousCheaperCount ?? 0 },
         { metric: "Tidak Naik", value: priceCompareSummary?.samePriceCount ?? 0 }
@@ -6168,6 +6192,30 @@ export default function Page() {
               </div>
               <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.4fr_220px_180px_auto]">
                 <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Mode Compare</span>
+                  <select
+                    value={priceCompareMode}
+                    onChange={(e) => setPriceCompareMode(e.target.value as "normal" | "strict")}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="normal">Normal (lebih longgar)</option>
+                    <option value="strict">Strict (lebih ketat)</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Toleransi Selisih (Rp)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    value={priceCompareToleranceNominal}
+                    onChange={(e) => setPriceCompareToleranceNominal(Math.max(0, Number(e.target.value) || 0))}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  />
+                </label>
+              </div>
+              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.4fr_220px_180px_auto]">
+                <label className="grid gap-1 text-xs text-slate-600">
                   <span>Cari Produk</span>
                   <input
                     value={priceCompareFilterQuery}
@@ -6289,12 +6337,39 @@ export default function Page() {
                               <p className="text-[11px] text-slate-500">Baris {row.todayRowNumber}</p>
                             </td>
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiah(row.todayPrice)}</td>
-                            <td className="px-2.5 py-2 align-top text-slate-700">{row.matched ? row.previousProductName : "-"}</td>
+                            <td className="px-2.5 py-2 align-top text-slate-700">
+                              {row.matched ? (
+                                row.previousProductName
+                              ) : (
+                                <div className="space-y-1">
+                                  <p>-</p>
+                                  {row.unmatchedReason ? (
+                                    <p className="text-[11px] text-amber-700">{row.unmatchedReason}</p>
+                                  ) : null}
+                                  {row.topCandidates?.length ? (
+                                    <p className="text-[11px] text-slate-500">
+                                      Kandidat:{" "}
+                                      {row.topCandidates
+                                        .map((candidate) => `${candidate.productName} (${candidate.similarityScore})`)
+                                        .join(" | ")}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              )}
+                            </td>
+                            
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
                               {row.matched && row.previousPrice ? rupiah(row.previousPrice) : "-"}
                             </td>
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
-                              {row.matched && typeof row.difference === "number" ? rupiah(row.difference) : "-"}
+                              {row.matched && typeof row.difference === "number" ? (
+                                <div>
+                                  <p>{rupiah(row.difference)}</p>
+                                  {row.toleranceApplied ? <p className="text-[11px] text-slate-500">Dalam toleransi</p> : null}
+                                </div>
+                              ) : (
+                                "-"
+                              )}
                             </td>
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomTokopedia)}</td>
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomShopee)}</td>
