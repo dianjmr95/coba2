@@ -442,7 +442,7 @@ export default async function DokumenPage({
         `}</style>
         <style>{`
           @media print {
-            @page { size: 11in 8.5in; margin: 10mm; }
+            @page { size: 8.5in 11in; margin: 10mm; }
             * { color: #000 !important; text-shadow: none !important; }
             .sheet { font-size: 12px !important; }
             p, li { orphans: 3; widows: 3; }
