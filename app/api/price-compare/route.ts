@@ -14,7 +14,36 @@ type CatalogRow = ParsedPriceRow & {
   sku?: string;
   normalizedName: string;
   matchName: string;
+  sectionTitle?: string;
 };
+
+const KNOWN_SECTION_BRANDS = [
+  "ACER",
+  "ASUS",
+  "LENOVO",
+  "HP",
+  "DELL",
+  "MSI",
+  "APPLE",
+  "SAMSUNG",
+  "HUAWEI",
+  "AXIOO",
+  "INFINIX",
+  "ADVAN",
+  "XIAOMI"
+];
+
+function normalizeSectionTitle(rawValue: unknown) {
+  const raw = String(rawValue ?? "").trim();
+  if (!raw) return "";
+  const upper = raw.toUpperCase();
+  const detectedBrand = KNOWN_SECTION_BRANDS.find((brand) => upper.includes(brand));
+  if (detectedBrand) return detectedBrand;
+
+  const cleaned = upper.replace(/[^A-Z0-9\s/-]/g, " ");
+  const firstToken = cleaned.split(/[\s/-]+/).find(Boolean);
+  return firstToken || upper;
+}
 
 type MatchCandidate = {
   item: CatalogRow;
@@ -90,6 +119,7 @@ function extractBpFormatRows(workbook: XLSX.WorkBook) {
 
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" }) as unknown[][];
   const parsed: CatalogRow[] = [];
+  let activeSectionTitle = "";
 
   for (let rowIdx = 0; rowIdx < rows.length; rowIdx += 1) {
     const row = rows[rowIdx] ?? [];
@@ -97,10 +127,16 @@ function extractBpFormatRows(workbook: XLSX.WorkBook) {
     const modelCodeRaw = row[1];
     const nameRaw = row[2];
     const priceRaw = row[3];
-
     const modelCode = String(modelCodeRaw ?? "").trim();
     const productName = String(nameRaw ?? "").trim();
     const price = parsePriceValue(priceRaw);
+
+    const looksLikeSectionRow = modelCode && !productName && !price;
+    if (looksLikeSectionRow) {
+      activeSectionTitle = normalizeSectionTitle(modelCode);
+      continue;
+    }
+
     if (!productName || !price) continue;
     const matchName = `${modelCode} ${productName}`.trim();
     const primarySku = normalizeSku(modelCodeRaw);
@@ -112,7 +148,8 @@ function extractBpFormatRows(workbook: XLSX.WorkBook) {
       price: Math.round(price),
       sku: primarySku || fallbackSku,
       normalizedName: toNormalizedName(matchName),
-      matchName
+      matchName,
+      sectionTitle: activeSectionTitle || undefined
     });
   }
 
@@ -128,7 +165,8 @@ function extractBestRows(workbook: XLSX.WorkBook) {
     ...row,
     sku: "",
     normalizedName: toNormalizedName(row.productName),
-    matchName: row.productName
+    matchName: row.productName,
+    sectionTitle: undefined
   }));
 }
 
@@ -198,6 +236,7 @@ export async function POST(request: NextRequest) {
         return {
           todayRowNumber: row.rowNumber,
           todayProductName: row.matchName || row.productName,
+          todaySectionTitle: row.sectionTitle || "",
           todayPrice: row.price,
           matched: false,
           similarityScore: 0,
@@ -228,6 +267,7 @@ export async function POST(request: NextRequest) {
         return {
           todayRowNumber: row.rowNumber,
           todayProductName: row.matchName || row.productName,
+          todaySectionTitle: row.sectionTitle || "",
           todayPrice: row.price,
           matched: false,
           similarityScore: Number((matched?.score ?? 0).toFixed(3)),
@@ -245,9 +285,11 @@ export async function POST(request: NextRequest) {
       return {
         todayRowNumber: row.rowNumber,
         todayProductName: row.matchName || row.productName,
+        todaySectionTitle: row.sectionTitle || "",
         todayPrice: row.price,
         matched: true,
         previousProductName: matched.best.matchName || matched.best.productName,
+        previousSectionTitle: matched.best.sectionTitle || "",
         previousPrice: matched.best.price,
         difference: Math.round(difference),
         similarityScore: Number(matched.score.toFixed(3)),
@@ -261,9 +303,11 @@ export async function POST(request: NextRequest) {
       .map((item) => ({
         todayRowNumber: 0,
         todayProductName: "",
+        todaySectionTitle: "",
         todayPrice: 0,
         matched: false,
         previousProductName: item.matchName || item.productName,
+        previousSectionTitle: item.sectionTitle || "",
         previousPrice: item.price,
         similarityScore: 0,
         status: "unmatched" as const,

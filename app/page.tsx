@@ -175,9 +175,11 @@ type PriceCompareStatus = "today_cheaper" | "previous_cheaper" | "same" | "unmat
 type PriceCompareRow = {
   todayRowNumber: number;
   todayProductName: string;
+  todaySectionTitle?: string;
   todayPrice: number;
   matched: boolean;
   previousProductName?: string;
+  previousSectionTitle?: string;
   previousPrice?: number;
   difference?: number;
   similarityScore: number;
@@ -1373,10 +1375,12 @@ export default function Page() {
   const [priceCompareFilterStatus, setPriceCompareFilterStatus] = useState<"semua" | PriceCompareStatus>("semua");
   const [priceCompareFilterMatch, setPriceCompareFilterMatch] = useState<"semua" | "match" | "tidak_match">("semua");
   const [priceCompareFilterUnmatchedType, setPriceCompareFilterUnmatchedType] = useState<"semua" | "produk_baru" | "produk_kosong">("semua");
+  const [priceCompareCollapsedSectionMap, setPriceCompareCollapsedSectionMap] = useState<Record<string, boolean>>({});
   const [priceCompareRowPresetMap, setPriceCompareRowPresetMap] = useState<Record<string, string>>({});
   const [priceCompareRowMarketplaceMap, setPriceCompareRowMarketplaceMap] = useState<Record<string, CompareCalcMarketplace>>({});
   const [priceCompareRowFinalPriceShopeeMap, setPriceCompareRowFinalPriceShopeeMap] = useState<Record<string, string>>({});
   const [priceCompareRowFinalPriceMallMap, setPriceCompareRowFinalPriceMallMap] = useState<Record<string, string>>({});
+  const [priceCompareRowApprovedMap, setPriceCompareRowApprovedMap] = useState<Record<string, boolean>>({});
   const todayPriceListInputRef = useRef<HTMLInputElement | null>(null);
   const previousPriceListInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1597,6 +1601,32 @@ export default function Page() {
         const finalPriceShopee = hasManualFinalShopee ? Math.round(parsedFinalShopee) : Math.round(calc.rekomShopee || 0);
         const finalPriceMall = hasManualFinalMall ? Math.round(parsedFinalMall) : Math.round(calc.rekomMall || 0);
         const finalPrice = marketplace === "shopee" ? finalPriceShopee : finalPriceMall;
+        const finalNetByMarketplace =
+          marketplace === "shopee"
+            ? calcShopee(
+                finalPrice,
+                Number(resolvedPreset.data.shopeeFee),
+                resolvedPreset.data.shopeeAfiliasiPct,
+                resolvedPreset.data.shopeeGratisOngkir,
+                resolvedPreset.data.shopeePromo,
+                resolvedPreset.data.shopeeAsuransi,
+                resolvedPreset.data.shopeeAfiliasiAktif
+              ).net
+            : calcMall(
+                finalPrice,
+                Number(resolvedPreset.data.mallFee),
+                resolvedPreset.data.mallAfiliasiPct,
+                resolvedPreset.data.mallBiayaJasa,
+                resolvedPreset.data.mallGratisOngkir,
+                resolvedPreset.data.mallAfiliasiAktif
+              ).net;
+        const diffPercent =
+          row.matched && typeof row.difference === "number" && (row.previousPrice ?? 0) > 0
+            ? Math.abs((row.difference / Math.max(row.previousPrice ?? 1, 1)) * 100)
+            : 0;
+        const isOutlierDifference = diffPercent >= 15;
+        const isOutlierBelowTarget = finalNetByMarketplace < calc.targetNet;
+        const isOutlier = isOutlierDifference || isOutlierBelowTarget;
         const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
         const sourceLabelShopee = hasManualFinalShopee
           ? "Manual Override (Shopee)"
@@ -1620,6 +1650,11 @@ export default function Page() {
           finalPriceShopee,
           finalPriceMall,
           finalPrice,
+          finalNetByMarketplace,
+          diffPercent,
+          isOutlierDifference,
+          isOutlierBelowTarget,
+          isOutlier,
           hasManualFinalShopee,
           hasManualFinalMall,
           hasManualFinal,
@@ -1657,6 +1692,30 @@ export default function Page() {
       return todayName.includes(query) || previousName.includes(query);
     });
   }, [priceCompareFilterMatch, priceCompareFilterQuery, priceCompareFilterStatus, priceCompareFilterUnmatchedType, priceCompareRowsWithCalc]);
+  const isPriceCompareFilterActive = useMemo(
+    () =>
+      priceCompareFilterQuery.trim() !== "" ||
+      priceCompareFilterStatus !== "semua" ||
+      priceCompareFilterMatch !== "semua" ||
+      priceCompareFilterUnmatchedType !== "semua",
+    [priceCompareFilterMatch, priceCompareFilterQuery, priceCompareFilterStatus, priceCompareFilterUnmatchedType]
+  );
+  const filteredPriceCompareGroupedBySection = useMemo(() => {
+    const map = new Map<string, typeof filteredPriceCompareRowsWithCalc>();
+    for (const item of filteredPriceCompareRowsWithCalc) {
+      const sectionKey = (item.row.todaySectionTitle || item.row.previousSectionTitle || "Tanpa Section").trim() || "Tanpa Section";
+      const bucket = map.get(sectionKey) ?? [];
+      bucket.push(item);
+      map.set(sectionKey, bucket);
+    }
+    return Array.from(map.entries()).map(([section, items]) => {
+      const matchedCount = items.filter((it) => it.row.matched).length;
+      const unmatchedCount = items.length - matchedCount;
+      const approvedCount = items.filter((it) => priceCompareRowApprovedMap[it.rowKey]).length;
+      const outlierCount = items.filter((it) => it.isOutlier).length;
+      return { section, items, matchedCount, unmatchedCount, approvedCount, outlierCount };
+    });
+  }, [filteredPriceCompareRowsWithCalc, priceCompareRowApprovedMap]);
 
   function getPriceCompareRowKey(row: PriceCompareRow) {
     return `${row.todayRowNumber}-${row.todayProductName}`;
@@ -3457,11 +3516,18 @@ export default function Page() {
 
       const rows = payload.data?.rows ?? [];
       const summary = payload.data?.summary ?? null;
+      const collapsedBySection: Record<string, boolean> = {};
+      for (const row of rows) {
+        const sectionKey = (row.todaySectionTitle || row.previousSectionTitle || "Tanpa Section").trim() || "Tanpa Section";
+        collapsedBySection[sectionKey] = true;
+      }
       setPriceCompareRows(rows);
       setPriceCompareRowPresetMap({});
       setPriceCompareRowMarketplaceMap({});
       setPriceCompareRowFinalPriceShopeeMap({});
       setPriceCompareRowFinalPriceMallMap({});
+      setPriceCompareRowApprovedMap({});
+      setPriceCompareCollapsedSectionMap(collapsedBySection);
       setPriceCompareSummary(summary);
       setPriceCompareNotice(
         summary
@@ -3528,12 +3594,19 @@ export default function Page() {
     );
   }
 
-  async function handleExportPriceCompare() {
+  async function handleExportPriceCompare(onlyApproved = false) {
     if (!priceCompareRowsWithCalc.length) {
       setPriceCompareNotice("Belum ada hasil compare untuk diekspor.");
       return;
     }
     if (isPriceCompareExporting) return;
+    const rowsToExport = onlyApproved
+      ? priceCompareRowsWithCalc.filter((item) => priceCompareRowApprovedMap[item.rowKey])
+      : priceCompareRowsWithCalc;
+    if (onlyApproved && !rowsToExport.length) {
+      setPriceCompareNotice("Belum ada baris yang di-approve untuk diekspor.");
+      return;
+    }
 
     setIsPriceCompareExporting(true);
     try {
@@ -3542,8 +3615,10 @@ export default function Page() {
       const compareSheet = workbook.addWorksheet("Compare");
       compareSheet.columns = [
         { header: "Baris Hari Ini", key: "todayRow", width: 14 },
+        { header: "Section Hari Ini", key: "todaySectionTitle", width: 24 },
         { header: "Produk Hari Ini", key: "todayProduct", width: 38 },
         { header: "Harga Hari Ini", key: "todayPrice", width: 16 },
+        { header: "Section Sebelumnya", key: "previousSectionTitle", width: 24 },
         { header: "Produk Sebelumnya", key: "previousProduct", width: 38 },
         { header: "Harga Sebelumnya", key: "previousPrice", width: 16 },
         { header: "Selisih", key: "difference", width: 14 },
@@ -3580,14 +3655,16 @@ export default function Page() {
         return "FFF1F5F9";
       };
 
-      for (const { row, calc, marketplace, targetMarginUsed, resolvedPreset, finalPriceShopee, finalPriceMall, finalPrice, hasManualFinalShopee, hasManualFinalMall, sourceLabel } of priceCompareRowsWithCalc) {
+      for (const { row, rowKey, calc, marketplace, targetMarginUsed, resolvedPreset, finalPriceShopee, finalPriceMall, finalPrice, hasManualFinalShopee, hasManualFinalMall, sourceLabel } of rowsToExport) {
         const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
         const hasManualFinalSelectedMarketplace =
           marketplace === "shopee" ? hasManualFinalShopee : hasManualFinalMall;
         const added = compareSheet.addRow({
           todayRow: row.todayRowNumber > 0 ? row.todayRowNumber : "",
+          todaySectionTitle: row.todaySectionTitle || "",
           todayProduct: row.todayProductName || "",
           todayPrice: row.todayPrice > 0 ? row.todayPrice : "",
+          previousSectionTitle: row.previousSectionTitle || "",
           previousProduct: row.previousProductName || "",
           previousPrice: row.previousPrice ?? "",
           difference: row.difference ?? "",
@@ -3620,6 +3697,7 @@ export default function Page() {
                 .join(" || "),
           toleranceApplied: row.toleranceApplied ? "Ya" : ""
         });
+        added.getCell(1).note = priceCompareRowApprovedMap[rowKey] ? "Approved" : "Belum Approved";
 
         const statusFill = getStatusFill(row.status);
         const statusCell = added.getCell(7);
@@ -3635,7 +3713,7 @@ export default function Page() {
         }
       }
 
-      for (const col of [3, 5, 6, 13, 14, 15, 16, 17, 18, 19]) {
+      for (const col of [4, 7, 8, 15, 16, 17, 18, 19, 20, 21]) {
         compareSheet.getColumn(col).numFmt = "#,##0";
       }
 
@@ -3661,9 +3739,11 @@ export default function Page() {
         { metric: "Filter Match", value: priceCompareFilterMatch },
         { metric: "Filter Kategori Tidak Match", value: priceCompareFilterUnmatchedType },
         { metric: "Target Margin (%)", value: targetMargin },
-        { metric: "Total Baris", value: priceCompareSummary?.totalRows ?? priceCompareRowsWithCalc.length },
+        { metric: "Mode Export", value: onlyApproved ? "Hanya Approved" : "Semua Baris" },
+        { metric: "Total Baris", value: rowsToExport.length },
         { metric: "Berhasil Match", value: priceCompareSummary?.matchedRows ?? 0 },
         { metric: "Baris Manual Override Shopee/Mall", value: priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length },
+        { metric: "Baris Approved", value: priceCompareRowsWithCalc.filter((item) => priceCompareRowApprovedMap[item.rowKey]).length },
         { metric: "Baris Kena Toleransi", value: priceCompareRowsWithCalc.filter((item) => item.row.toleranceApplied).length },
         { metric: "Jumlah Produk Baru", value: priceCompareRowsWithCalc.filter((item) => item.row.unmatchedType === "produk_baru").length },
         { metric: "Jumlah Produk Kosong", value: priceCompareRowsWithCalc.filter((item) => item.row.unmatchedType === "produk_kosong").length },
@@ -3674,7 +3754,7 @@ export default function Page() {
       summaryRows.forEach((item) => summarySheet.addRow(item));
 
       const stamp = new Date().toISOString().slice(0, 10);
-      const fileName = `hasil-compare-pricelist-${stamp}.xlsx`;
+      const fileName = `${onlyApproved ? "approved-" : ""}hasil-compare-pricelist-${stamp}.xlsx`;
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -6190,11 +6270,55 @@ export default function Page() {
                 </button>
                 <button
                   type="button"
-                  onClick={handleExportPriceCompare}
+                  onClick={() => handleExportPriceCompare(false)}
                   disabled={isPriceCompareExporting || !priceCompareRowsWithCalc.length}
                   className="rounded-2xl border border-emerald-200 bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   {isPriceCompareExporting ? "Mengekspor..." : "Export Hasil Compare (.xlsx)"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportPriceCompare(true)}
+                  disabled={isPriceCompareExporting || !priceCompareRowsWithCalc.some((item) => priceCompareRowApprovedMap[item.rowKey])}
+                  className="rounded-2xl border border-stone-400 bg-white px-3 py-2 text-sm font-medium text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isPriceCompareExporting ? "Mengekspor..." : "Export Approved (.xlsx)"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const keys = filteredPriceCompareRowsWithCalc.map((item) => item.rowKey);
+                    if (!keys.length) {
+                      setPriceCompareNotice("Tidak ada baris (sesuai filter) untuk di-approve.");
+                      return;
+                    }
+                    setPriceCompareRowApprovedMap((prev) => {
+                      const next = { ...prev };
+                      for (const key of keys) next[key] = true;
+                      return next;
+                    });
+                    setPriceCompareNotice(`${keys.length} baris (sesuai filter) berhasil di-approve.`);
+                  }}
+                  disabled={!filteredPriceCompareRowsWithCalc.length}
+                  className="rounded-2xl border border-stone-400 bg-white px-3 py-2 text-sm font-medium text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  Approve Semua (Filtered)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const approvedCount = Object.values(priceCompareRowApprovedMap).filter(Boolean).length;
+                    setPriceCompareRowApprovedMap({});
+                    setPriceCompareNotice(
+                      approvedCount > 0
+                        ? `${approvedCount} approval baris berhasil dibersihkan.`
+                        : "Tidak ada approval yang perlu dibersihkan."
+                    );
+                  }}
+                  disabled={!Object.values(priceCompareRowApprovedMap).some(Boolean)}
+                  className="rounded-2xl border border-stone-400 bg-white px-3 py-2 text-sm font-medium text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  Clear Approve
                 </button>
                 <button
                   type="button"
@@ -6206,6 +6330,8 @@ export default function Page() {
                     setPriceCompareRowMarketplaceMap({});
                     setPriceCompareRowFinalPriceShopeeMap({});
                     setPriceCompareRowFinalPriceMallMap({});
+                    setPriceCompareRowApprovedMap({});
+                    setPriceCompareCollapsedSectionMap({});
                     setTodayPriceListFile(null);
                     setPreviousPriceListFile(null);
                     if (todayPriceListInputRef.current) todayPriceListInputRef.current.value = "";
@@ -6322,7 +6448,9 @@ export default function Page() {
                 <p className="mt-2 text-xs text-slate-600">
                   Menampilkan <strong>{filteredPriceCompareRowsWithCalc.length}</strong> dari{" "}
                   <strong>{priceCompareRowsWithCalc.length}</strong> baris hasil compare. Override manual Shopee/Mall:{" "}
-                  <strong>{priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length}</strong>.
+                  <strong>{priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length}</strong>. Approved:{" "}
+                  <strong>{priceCompareRowsWithCalc.filter((item) => priceCompareRowApprovedMap[item.rowKey]).length}</strong>. Outlier:{" "}
+                  <strong>{priceCompareRowsWithCalc.filter((item) => item.isOutlier).length}</strong>.
                 </p>
               ) : null}
               {priceCompareSummary ? (
@@ -6350,208 +6478,226 @@ export default function Page() {
                 </div>
               ) : null}
               {filteredPriceCompareRowsWithCalc.length ? (
-                <div className="mt-3 max-h-[360px] overflow-auto rounded-2xl border border-stone-200 bg-white">
-                  <table className="min-w-full text-left text-xs">
-                    <thead className="sticky top-0 z-10 bg-stone-100 text-slate-700">
-                      <tr>
-                        <th className="px-2.5 py-2 font-semibold">Produk (Hari Ini)</th>
-                        <th className="px-2.5 py-2 font-semibold text-right">Harga Hari Ini</th>
-                        <th className="px-2.5 py-2 font-semibold">Produk (Sebelumnya)</th>
-                        <th className="px-2.5 py-2 font-semibold text-right">Harga Sebelumnya</th>
-                        <th className="px-2.5 py-2 font-semibold text-right">Selisih</th>
-                        <th className="px-2.5 py-2 font-semibold text-right">Rekom Tokopedia</th>
-                        <th className="px-2.5 py-2 font-semibold text-right">Rekom Shopee</th>
-                        <th className="px-2.5 py-2 font-semibold text-right">Rekom Mall</th>
-                        <th className="px-2.5 py-2 font-semibold">Status</th>
-                        <th className="px-2.5 py-2 font-semibold text-right">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredPriceCompareRowsWithCalc.map(({ row, calc, rowKey, presetId, marketplace, marketplaceLabel, targetMarginUsed, finalPriceShopee, finalPriceMall, finalPrice, sourceLabelShopee, sourceLabelMall }, index) => {
-                        const statusClass =
-                          row.status === "today_cheaper"
-                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                            : row.status === "previous_cheaper"
-                              ? "bg-rose-50 text-rose-700 border-rose-200"
-                              : row.status === "same"
-                                ? "bg-yellow-50 text-yellow-700 border-yellow-200"
-                                : "bg-stone-100 text-slate-600 border-stone-200";
-                        const rowTintClass =
-                          row.status === "today_cheaper"
-                            ? "bg-emerald-50/40"
-                            : row.status === "previous_cheaper"
-                              ? "bg-rose-50/40"
-                              : row.status === "same"
-                                ? "bg-yellow-50/50"
-                                : "";
+                <div className="mt-3 max-h-[560px] space-y-2 overflow-y-auto rounded-2xl border border-stone-300 bg-white p-2">
+                  {filteredPriceCompareGroupedBySection.map((group) => {
+                    const collapsed = isPriceCompareFilterActive ? false : Boolean(priceCompareCollapsedSectionMap[group.section]);
+                    return (
+                      <div key={`group-${group.section}`} className="rounded-xl border border-stone-300 bg-stone-50/30">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPriceCompareCollapsedSectionMap((prev) => ({
+                              ...prev,
+                              [group.section]: !prev[group.section]
+                            }))
+                          }
+                          className="flex w-full flex-wrap items-center justify-between gap-2 border-b border-stone-300 px-3 py-2 text-left"
+                        >
+                          <div>
+                            <p className="text-sm font-semibold text-stone-900">{group.section}</p>
+                            <p className="text-xs text-stone-600">
+                              {group.items.length} baris • Match {group.matchedCount} • Unmatch {group.unmatchedCount} • Approved {group.approvedCount} • Outlier {group.outlierCount}
+                            </p>
+                          </div>
+                          <span className="rounded-full border border-stone-400 bg-white px-2 py-0.5 text-xs text-stone-700">
+                            {collapsed ? "Tampilkan" : "Sembunyikan"}
+                          </span>
+                        </button>
+                        {!collapsed ? (
+                          <div className="space-y-2 p-2">
+                            {group.items.map(({ row, calc, rowKey, presetId, marketplace, marketplaceLabel, targetMarginUsed, finalPriceShopee, finalPriceMall, finalPrice, finalNetByMarketplace, isOutlier, isOutlierBelowTarget, isOutlierDifference, diffPercent, sourceLabelShopee, sourceLabelMall }, index) => {
+                    const statusClass =
+                      row.status === "today_cheaper"
+                        ? "bg-stone-100 text-stone-800 border-stone-300"
+                        : row.status === "previous_cheaper"
+                          ? "bg-stone-100 text-stone-800 border-stone-300"
+                          : row.status === "same"
+                            ? "bg-stone-100 text-stone-800 border-stone-300"
+                            : "bg-stone-100 text-stone-700 border-stone-300";
+                    const cardTintClass = "border-stone-300 bg-white";
 
-                        return (
-                          <tr key={`${row.todayRowNumber}-${index}`} className={`border-t border-stone-100 ${rowTintClass}`}>
-                            <td className="px-2.5 py-2 align-top text-slate-800">
-                              <p className="font-medium">{row.todayProductName || "-"}</p>
-                              <p className="text-[11px] text-slate-500">
-                                {row.todayRowNumber > 0 ? `Baris ${row.todayRowNumber}` : "Tidak ada di hari ini"}
-                              </p>
-                            </td>
-                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
-                              {row.todayPrice > 0 ? rupiah(row.todayPrice) : "-"}
-                            </td>
-                            <td className="px-2.5 py-2 align-top text-slate-700">
-                              {row.matched ? (
-                                row.previousProductName
-                              ) : (
-                                <div className="space-y-1">
-                                  <p>{row.previousProductName || "-"}</p>
-                                  {row.unmatchedReason ? (
-                                    <p className="text-[11px] text-amber-700">{row.unmatchedReason}</p>
-                                  ) : null}
-                                  {row.topCandidates?.length ? (
-                                    <p className="text-[11px] text-slate-500">
-                                      Kandidat:{" "}
-                                      {row.topCandidates
-                                        .map((candidate) => `${candidate.productName} (${candidate.similarityScore})`)
-                                        .join(" | ")}
-                                    </p>
-                                  ) : null}
-                                </div>
-                              )}
-                            </td>
-                            
-                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
-                              {typeof row.previousPrice === "number" && row.previousPrice > 0 ? rupiah(row.previousPrice) : "-"}
-                            </td>
-                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
-                              {row.matched && typeof row.difference === "number" ? (
-                                <div>
-                                  <p>{rupiah(row.difference)}</p>
-                                  {row.toleranceApplied ? <p className="text-[11px] text-slate-500">Dalam toleransi</p> : null}
-                                </div>
-                              ) : (
-                                "-"
-                              )}
-                            </td>
-                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomTokopedia)}</td>
-                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomShopee)}</td>
-                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomMall)}</td>
-                            <td className="px-2.5 py-2 align-top">
-                              <div className="flex flex-wrap items-center gap-1">
-                                <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-medium ${statusClass}`}>
-                                  {priceCompareStatusLabel[row.status]}
+                    return (
+                      <div key={`${row.todayRowNumber}-${index}`} className={`rounded-xl border-2 p-3 ${cardTintClass}`}>
+                        <div className="grid gap-2 md:grid-cols-[1.5fr_1fr]">
+                          <div className="space-y-1">
+                            <p className="text-xs text-slate-500">{row.todayRowNumber > 0 ? `Baris ${row.todayRowNumber}` : "Tidak ada di hari ini"}</p>
+                            {row.todaySectionTitle ? (
+                              <span className="inline-flex rounded-full border border-stone-300 bg-stone-100 px-2 py-0.5 text-[11px] font-semibold text-stone-800">
+                                {row.todaySectionTitle}
+                              </span>
+                            ) : null}
+                            <div className="flex flex-wrap items-center gap-1">
+                              <p className="text-sm font-semibold text-slate-900">{row.todayProductName || "-"}</p>
+                              {isOutlier ? (
+                                <span className="inline-flex rounded-full border border-stone-500 bg-stone-200 px-2 py-0.5 text-[11px] font-semibold text-stone-900">
+                                  Outlier
                                 </span>
-                                {row.status === "unmatched" && row.unmatchedType === "produk_baru" ? (
-                                  <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700">
-                                    Produk Baru
-                                  </span>
-                                ) : null}
-                                {row.status === "unmatched" && row.unmatchedType === "produk_kosong" ? (
-                                  <span className="inline-flex rounded-full border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-700">
-                                    Produk Kosong
-                                  </span>
-                                ) : null}
+                              ) : null}
+                            </div>
+                            {row.previousSectionTitle ? (
+                              <span className="inline-flex rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] font-medium text-stone-700">
+                                Sebelumnya: {row.previousSectionTitle}
+                              </span>
+                            ) : null}
+                            <p className="text-xs text-slate-700">{row.previousProductName || "-"}</p>
+                            {row.unmatchedReason ? <p className="text-xs text-amber-700">{row.unmatchedReason}</p> : null}
+                            {row.topCandidates?.length ? (
+                              <p className="text-[11px] text-slate-500">
+                                Kandidat: {row.topCandidates.map((candidate) => `${candidate.productName} (${candidate.similarityScore})`).join(" | ")}
+                              </p>
+                            ) : null}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="rounded-lg border border-stone-200 bg-white px-2 py-1">
+                              <p className="text-slate-500">Hari Ini</p>
+                              <p className="font-semibold text-slate-900">{row.todayPrice > 0 ? rupiah(row.todayPrice) : "-"}</p>
+                            </div>
+                            <div className="rounded-lg border border-stone-200 bg-white px-2 py-1">
+                              <p className="text-slate-500">Sebelumnya</p>
+                              <p className="font-semibold text-slate-900">{typeof row.previousPrice === "number" && row.previousPrice > 0 ? rupiah(row.previousPrice) : "-"}</p>
+                            </div>
+                            <div className="rounded-lg border border-stone-200 bg-white px-2 py-1">
+                              <p className="text-slate-500">Selisih</p>
+                              <p className="font-semibold text-slate-900">{row.matched && typeof row.difference === "number" ? rupiah(row.difference) : "-"}</p>
+                              {row.toleranceApplied ? <p className="text-[11px] text-slate-500">Dalam toleransi</p> : null}
+                            </div>
+                            <div className="rounded-lg border border-stone-200 bg-white px-2 py-1">
+                              <p className="text-slate-500">Status</p>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusClass}`}>{priceCompareStatusLabel[row.status]}</span>
+                                {row.status === "unmatched" && row.unmatchedType === "produk_baru" ? <span className="inline-flex rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] font-medium text-stone-700">Produk Baru</span> : null}
+                                {row.status === "unmatched" && row.unmatchedType === "produk_kosong" ? <span className="inline-flex rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] font-medium text-stone-700">Produk Kosong</span> : null}
                               </div>
-                            </td>
-                            <td className="px-2.5 py-2 align-top text-right">
-                              {row.matched && row.todayPrice ? (
-                                <div className="grid justify-items-end gap-1">
-                                  <select
-                                    value={presetId}
-                                    onChange={(e) =>
-                                      setPriceCompareRowPresetMap((prev) => ({ ...prev, [rowKey]: e.target.value }))
-                                    }
-                                    className="w-[170px] rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
-                                  >
-                                    <option value={PRICE_COMPARE_PRESET_AUTO_LAPTOP}>Auto: PRESET LAPTOP</option>
-                                    <option value={PRICE_COMPARE_PRESET_ACTIVE}>Preset Aktif</option>
-                                    {presets.map((preset) => (
-                                      <option key={`row-preset-${rowKey}-${preset.id}`} value={preset.id}>
-                                        {preset.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <select
-                                    value={marketplace}
-                                    onChange={(e) =>
-                                      setPriceCompareRowMarketplaceMap((prev) => ({
-                                        ...prev,
-                                        [rowKey]: e.target.value as CompareCalcMarketplace
-                                      }))
-                                    }
-                                    className="w-[170px] rounded-lg border border-stone-200 bg-white px-2 py-1 text-[11px] text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
-                                  >
-                                    <option value="shopee">Hitung Shopee</option>
-                                    <option value="mall">Hitung Tokopedia Mall</option>
-                                  </select>
-                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
-                                    Target margin dipakai: <strong className="text-slate-700">{targetMarginUsed.toFixed(2)}%</strong>
-                                  </p>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCalculateRowToCalculator(row)}
-                                    className="w-[170px] rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-[11px] font-semibold text-cyan-700 transition hover:bg-cyan-100"
-                                  >
-                                    Hitung di Kalkulator
-                                  </button>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={priceCompareRowFinalPriceShopeeMap[rowKey] ?? ""}
-                                    onChange={(e) =>
-                                      setPriceCompareRowFinalPriceShopeeMap((prev) => ({
-                                        ...prev,
-                                        [rowKey]: e.target.value
-                                      }))
-                                    }
-                                    placeholder="Harga final Shopee (opsional)"
-                                    className="w-[170px] rounded-lg border border-orange-200 bg-white px-2 py-1 text-[11px] text-right text-slate-700 outline-none transition focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
-                                  />
-                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
-                                    {sourceLabelShopee}: <strong className="text-slate-700">{rupiahOrDash(finalPriceShopee)}</strong>
-                                  </p>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    value={priceCompareRowFinalPriceMallMap[rowKey] ?? ""}
-                                    onChange={(e) =>
-                                      setPriceCompareRowFinalPriceMallMap((prev) => ({
-                                        ...prev,
-                                        [rowKey]: e.target.value
-                                      }))
-                                    }
-                                    placeholder="Harga final Tokopedia Mall (opsional)"
-                                    className="w-[170px] rounded-lg border border-sky-200 bg-white px-2 py-1 text-[11px] text-right text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
-                                  />
-                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
-                                    {sourceLabelMall}: <strong className="text-slate-700">{rupiahOrDash(finalPriceMall)}</strong>
-                                  </p>
-                                  <p className="w-[170px] text-right text-[11px] text-slate-500">
-                                    Dipakai untuk Kalkulator ({marketplaceLabel}): <strong className="text-slate-700">{rupiahOrDash(finalPrice)}</strong>
-                                  </p>
-                                  <div className="flex items-center justify-end gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => useComparisonPrice(row.todayPrice, "modal")}
-                                    className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
-                                  >
-                                    Ke Modal
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => useComparisonPrice(row.todayPrice, "harga_jual")}
-                                    className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 transition hover:bg-stone-100"
-                                  >
-                                    Ke Harga Jual
-                                  </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <span className="text-[11px] text-slate-400">-</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                            </div>
+                          </div>
+                        </div>
+                        {isOutlier ? (
+                          <p className="mt-1 text-xs text-stone-700">
+                            Alert: {isOutlierDifference ? `selisih ${diffPercent.toFixed(1)}%` : ""}{isOutlierDifference && isOutlierBelowTarget ? " + " : ""}{isOutlierBelowTarget ? "net final di bawah target" : ""}.
+                          </p>
+                        ) : null}
+
+                        <div className="mt-2 grid gap-2 text-xs md:grid-cols-3">
+                          <div className="rounded-lg border border-stone-200 bg-white px-2 py-1">
+                            <p className="text-slate-500">Rekom Tokopedia</p>
+                            <p className="font-semibold text-slate-900">{rupiahOrDash(calc.rekomTokopedia)}</p>
+                          </div>
+                          <div className="rounded-lg border border-stone-200 bg-white px-2 py-1">
+                            <p className="text-slate-500">Rekom Shopee</p>
+                            <p className="font-semibold text-slate-900">{rupiahOrDash(calc.rekomShopee)}</p>
+                          </div>
+                          <div className="rounded-lg border border-stone-200 bg-white px-2 py-1">
+                            <p className="text-slate-500">Rekom Mall</p>
+                            <p className="font-semibold text-slate-900">{rupiahOrDash(calc.rekomMall)}</p>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs">
+                          <label className="inline-flex items-center gap-2 text-slate-700">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(priceCompareRowApprovedMap[rowKey])}
+                              onChange={(e) => setPriceCompareRowApprovedMap((prev) => ({ ...prev, [rowKey]: e.target.checked }))}
+                            />
+                            Approve untuk Export
+                          </label>
+                          <p className="text-slate-500">Net final ({marketplaceLabel}): <strong className="text-slate-800">{rupiahOrDash(finalNetByMarketplace)}</strong></p>
+                          <p className="w-full text-[11px] text-slate-500">Tip: isi Harga Final otomatis mengaktifkan approve untuk baris ini.</p>
+                        </div>
+
+                        {row.matched && row.todayPrice ? (
+                          <div className="mt-2 grid gap-2 rounded-lg border border-stone-200 bg-white p-2 md:grid-cols-2">
+                            <div className="grid gap-2">
+                              <select
+                                value={presetId}
+                                onChange={(e) => setPriceCompareRowPresetMap((prev) => ({ ...prev, [rowKey]: e.target.value }))}
+                                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                              >
+                                <option value={PRICE_COMPARE_PRESET_AUTO_LAPTOP}>Auto: PRESET LAPTOP</option>
+                                <option value={PRICE_COMPARE_PRESET_ACTIVE}>Preset Aktif</option>
+                                {presets.map((preset) => (
+                                  <option key={`row-preset-${rowKey}-${preset.id}`} value={preset.id}>
+                                    {preset.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                value={marketplace}
+                                onChange={(e) => setPriceCompareRowMarketplaceMap((prev) => ({ ...prev, [rowKey]: e.target.value as CompareCalcMarketplace }))}
+                                className="w-full rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                              >
+                                <option value="shopee">Hitung Shopee</option>
+                                <option value="mall">Hitung Tokopedia Mall</option>
+                              </select>
+                              <p className="text-xs text-slate-500">Target margin dipakai: <strong className="text-slate-700">{targetMarginUsed.toFixed(2)}%</strong></p>
+                              <button
+                                type="button"
+                                onClick={() => handleCalculateRowToCalculator(row)}
+                                className="rounded-lg border border-cyan-200 bg-cyan-50 px-2 py-1 text-xs font-semibold text-cyan-700 transition hover:bg-cyan-100"
+                              >
+                                Hitung di Kalkulator
+                              </button>
+                              <div className="flex flex-wrap gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => useComparisonPrice(row.todayPrice, "modal")}
+                                  className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                                >
+                                  Ke Modal
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => useComparisonPrice(row.todayPrice, "harga_jual")}
+                                  className="rounded-lg border border-stone-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-stone-100"
+                                >
+                                  Ke Harga Jual
+                                </button>
+                              </div>
+                            </div>
+                            <div className="grid gap-2">
+                              <input
+                                type="number"
+                                min={0}
+                                value={priceCompareRowFinalPriceShopeeMap[rowKey] ?? ""}
+                                onChange={(e) => {
+                                  const nextValue = e.target.value;
+                                  setPriceCompareRowFinalPriceShopeeMap((prev) => ({ ...prev, [rowKey]: nextValue }));
+                                  const parsed = Number(nextValue);
+                                  if (nextValue.trim() !== "" && Number.isFinite(parsed) && parsed > 0) {
+                                    setPriceCompareRowApprovedMap((prev) => ({ ...prev, [rowKey]: true }));
+                                  }
+                                }}
+                                placeholder="Harga final Shopee (opsional)"
+                                className="w-full rounded-lg border border-orange-200 bg-white px-2 py-1 text-xs text-right text-slate-700 outline-none transition focus:border-orange-300 focus:ring-2 focus:ring-orange-100"
+                              />
+                              <p className="text-right text-xs text-slate-500">{sourceLabelShopee}: <strong className="text-slate-700">{rupiahOrDash(finalPriceShopee)}</strong></p>
+                              <input
+                                type="number"
+                                min={0}
+                                value={priceCompareRowFinalPriceMallMap[rowKey] ?? ""}
+                                onChange={(e) => {
+                                  const nextValue = e.target.value;
+                                  setPriceCompareRowFinalPriceMallMap((prev) => ({ ...prev, [rowKey]: nextValue }));
+                                  const parsed = Number(nextValue);
+                                  if (nextValue.trim() !== "" && Number.isFinite(parsed) && parsed > 0) {
+                                    setPriceCompareRowApprovedMap((prev) => ({ ...prev, [rowKey]: true }));
+                                  }
+                                }}
+                                placeholder="Harga final Tokopedia Mall (opsional)"
+                                className="w-full rounded-lg border border-sky-200 bg-white px-2 py-1 text-xs text-right text-slate-700 outline-none transition focus:border-sky-300 focus:ring-2 focus:ring-sky-100"
+                              />
+                              <p className="text-right text-xs text-slate-500">{sourceLabelMall}: <strong className="text-slate-700">{rupiahOrDash(finalPriceMall)}</strong></p>
+                              <p className="text-right text-xs text-slate-500">Dipakai untuk Kalkulator ({marketplaceLabel}): <strong className="text-slate-700">{rupiahOrDash(finalPrice)}</strong></p>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="mt-3 rounded-2xl border border-dashed border-stone-300 bg-white/80 px-4 py-6 text-center text-sm text-slate-600">
