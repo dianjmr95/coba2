@@ -154,6 +154,9 @@ function pickUnusedFromBucket(bucket: CatalogRow[] | undefined, usedCatalogKeys:
   }
   return null;
 }
+function getCatalogRowKey(item: CatalogRow) {
+  return `${item.rowNumber}:${item.sku ?? ""}:${item.normalizedName}`;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -169,22 +172,6 @@ export async function POST(request: NextRequest) {
 
     const todayRows = extractBestRows(todayWorkbook);
     const previousRows = extractBestRows(previousWorkbook);
-
-    if (!todayRows.length) {
-      return NextResponse.json({
-        ok: true,
-        data: {
-          rows: [],
-          summary: {
-            totalRows: 0,
-            matchedRows: 0,
-            todayCheaperCount: 0,
-            previousCheaperCount: 0,
-            samePriceCount: 0
-          }
-        }
-      });
-    }
 
     const previousCatalog: CatalogRow[] = previousRows;
     const previousBySku = new Map<string, CatalogRow>();
@@ -215,7 +202,8 @@ export async function POST(request: NextRequest) {
           matched: false,
           similarityScore: 0,
           status: "unmatched" as const,
-          unmatchedReason: "SKU/model code tidak ditemukan di price list sebelumnya (indikasi produk baru).",
+          unmatchedType: "produk_baru" as const,
+          unmatchedReason: "Produk baru: tidak ada di price list sebelumnya.",
           topCandidates
         };
       }
@@ -244,12 +232,13 @@ export async function POST(request: NextRequest) {
           matched: false,
           similarityScore: Number((matched?.score ?? 0).toFixed(3)),
           status: "unmatched" as const,
-          unmatchedReason: reason,
+          unmatchedType: "produk_baru" as const,
+          unmatchedReason: `Produk baru: ${reason}.`,
           topCandidates
         };
       }
 
-      const matchedKey = `${matched.best.rowNumber}:${matched.best.sku ?? ""}:${matched.best.normalizedName}`;
+      const matchedKey = getCatalogRowKey(matched.best);
       usedCatalogKeys.add(matchedKey);
       const rawDifference = row.price - matched.best.price;
       const difference = Math.abs(rawDifference) <= toleranceNominal ? 0 : rawDifference;
@@ -267,7 +256,25 @@ export async function POST(request: NextRequest) {
       };
     });
 
-    const matchedRows = rows.filter((item) => item.matched);
+    const previousOnlyRows = previousCatalog
+      .filter((item) => !usedCatalogKeys.has(getCatalogRowKey(item)))
+      .map((item) => ({
+        todayRowNumber: 0,
+        todayProductName: "",
+        todayPrice: 0,
+        matched: false,
+        previousProductName: item.matchName || item.productName,
+        previousPrice: item.price,
+        similarityScore: 0,
+        status: "unmatched" as const,
+        unmatchedType: "produk_kosong" as const,
+        unmatchedReason: "Produk kosong: ada di price list sebelumnya, tetapi hilang di hari ini.",
+        topCandidates: [] as Array<{ productName: string; price: number; similarityScore: number }>
+      }));
+
+    const finalRows = [...rows, ...previousOnlyRows];
+
+    const matchedRows = finalRows.filter((item) => item.matched);
     const todayCheaperCount = matchedRows.filter((item) => item.status === "today_cheaper").length;
     const previousCheaperCount = matchedRows.filter((item) => item.status === "previous_cheaper").length;
     const samePriceCount = matchedRows.filter((item) => item.status === "same").length;
@@ -275,9 +282,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       data: {
-        rows,
+        rows: finalRows,
         summary: {
-          totalRows: rows.length,
+          totalRows: finalRows.length,
           matchedRows: matchedRows.length,
           todayCheaperCount,
           previousCheaperCount,

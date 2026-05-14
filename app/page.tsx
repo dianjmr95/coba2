@@ -182,6 +182,7 @@ type PriceCompareRow = {
   difference?: number;
   similarityScore: number;
   status: PriceCompareStatus;
+  unmatchedType?: "produk_baru" | "produk_kosong";
   unmatchedReason?: string;
   toleranceApplied?: boolean;
   topCandidates?: Array<{
@@ -1366,10 +1367,12 @@ export default function Page() {
   const [priceCompareSummary, setPriceCompareSummary] = useState<PriceCompareSummary | null>(null);
   const [priceCompareMode, setPriceCompareMode] = useState<"normal" | "strict">("normal");
   const [priceCompareToleranceNominal, setPriceCompareToleranceNominal] = useState(0);
+  const [priceComparePriceScale, setPriceComparePriceScale] = useState<"rupiah" | "ribuan">("ribuan");
   const [priceComparePresetId, setPriceComparePresetId] = useState<string>(PRICE_COMPARE_PRESET_AUTO_LAPTOP);
   const [priceCompareFilterQuery, setPriceCompareFilterQuery] = useState("");
   const [priceCompareFilterStatus, setPriceCompareFilterStatus] = useState<"semua" | PriceCompareStatus>("semua");
   const [priceCompareFilterMatch, setPriceCompareFilterMatch] = useState<"semua" | "match" | "tidak_match">("semua");
+  const [priceCompareFilterUnmatchedType, setPriceCompareFilterUnmatchedType] = useState<"semua" | "produk_baru" | "produk_kosong">("semua");
   const [priceCompareRowPresetMap, setPriceCompareRowPresetMap] = useState<Record<string, string>>({});
   const [priceCompareRowMarketplaceMap, setPriceCompareRowMarketplaceMap] = useState<Record<string, CompareCalcMarketplace>>({});
   const [priceCompareRowFinalPriceShopeeMap, setPriceCompareRowFinalPriceShopeeMap] = useState<Record<string, string>>({});
@@ -1569,6 +1572,7 @@ export default function Page() {
 
     return { label: "Preset Aktif di Kalkulator", data: currentPresetData };
   }, [currentPresetData, presets, priceComparePresetId]);
+  const priceCompareScaleMultiplier = priceComparePriceScale === "ribuan" ? 1000 : 1;
 
   const priceCompareRowsWithCalc = useMemo(
     () =>
@@ -1578,7 +1582,8 @@ export default function Page() {
         const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "shopee";
         const targetMarginUsed = targetMargin;
         const resolvedPreset = resolveComparePresetById(presetId);
-        const calc = calcItemPriceFromPreset(row.todayPrice, targetMarginUsed, resolvedPreset.data);
+        const modalForCalc = Math.round(row.todayPrice * priceCompareScaleMultiplier);
+        const calc = calcItemPriceFromPreset(modalForCalc, targetMarginUsed, resolvedPreset.data);
         const rawFinalShopee = (priceCompareRowFinalPriceShopeeMap[rowKey] ?? "").trim();
         const rawFinalMall = (priceCompareRowFinalPriceMallMap[rowKey] ?? "").trim();
         const parsedFinalShopee = Number(rawFinalShopee);
@@ -1630,6 +1635,7 @@ export default function Page() {
       priceCompareRowMarketplaceMap,
       priceCompareRowFinalPriceShopeeMap,
       priceCompareRowFinalPriceMallMap,
+      priceCompareScaleMultiplier,
       resolveComparePresetById,
       targetMargin
     ]
@@ -1640,13 +1646,17 @@ export default function Page() {
       if (priceCompareFilterStatus !== "semua" && row.status !== priceCompareFilterStatus) return false;
       if (priceCompareFilterMatch === "match" && !row.matched) return false;
       if (priceCompareFilterMatch === "tidak_match" && row.matched) return false;
+      if (priceCompareFilterUnmatchedType !== "semua") {
+        if (row.status !== "unmatched") return false;
+        if (row.unmatchedType !== priceCompareFilterUnmatchedType) return false;
+      }
       if (!query) return true;
 
       const todayName = row.todayProductName.toLowerCase();
       const previousName = String(row.previousProductName || "").toLowerCase();
       return todayName.includes(query) || previousName.includes(query);
     });
-  }, [priceCompareFilterMatch, priceCompareFilterQuery, priceCompareFilterStatus, priceCompareRowsWithCalc]);
+  }, [priceCompareFilterMatch, priceCompareFilterQuery, priceCompareFilterStatus, priceCompareFilterUnmatchedType, priceCompareRowsWithCalc]);
 
   function getPriceCompareRowKey(row: PriceCompareRow) {
     return `${row.todayRowNumber}-${row.todayProductName}`;
@@ -3468,14 +3478,14 @@ export default function Page() {
 
   function useComparisonPrice(value: number, target: PriceFetchTarget) {
     if (!Number.isFinite(value) || value <= 0) return;
-    const rounded = Math.round(value);
+    const rounded = Math.round(value * priceCompareScaleMultiplier);
     if (target === "modal") {
       setModal(rounded);
-      setPriceCompareNotice(`Harga ${rupiah(rounded)} (price list hari ini) diterapkan ke Modal.`);
+      setPriceCompareNotice(`Harga ${rupiah(rounded)} (price list hari ini, skala ${priceComparePriceScale === "ribuan" ? "x1000" : "normal"}) diterapkan ke Modal.`);
       return;
     }
     setHarga(rounded);
-    setPriceCompareNotice(`Harga ${rupiah(rounded)} (price list hari ini) diterapkan ke Harga Jual.`);
+    setPriceCompareNotice(`Harga ${rupiah(rounded)} (price list hari ini, skala ${priceComparePriceScale === "ribuan" ? "x1000" : "normal"}) diterapkan ke Harga Jual.`);
   }
 
   function handleCalculateRowToCalculator(row: PriceCompareRow) {
@@ -3489,7 +3499,8 @@ export default function Page() {
     const marketplace = priceCompareRowMarketplaceMap[rowKey] ?? "shopee";
     const targetMarginUsed = targetMargin;
     const resolvedPreset = resolveComparePresetById(presetId);
-    const calc = calcItemPriceFromPreset(row.todayPrice, targetMarginUsed, resolvedPreset.data);
+    const modalForCalc = Math.round(row.todayPrice * priceCompareScaleMultiplier);
+    const calc = calcItemPriceFromPreset(modalForCalc, targetMarginUsed, resolvedPreset.data);
 
     const rekomHarga = marketplace === "shopee" ? calc.rekomShopee : calc.rekomMall;
     const rawManualFinal =
@@ -3501,8 +3512,8 @@ export default function Page() {
       rawManualFinal !== "" && Number.isFinite(parsedManualFinal) && parsedManualFinal > 0
         ? Math.round(parsedManualFinal)
         : Math.round(rekomHarga || 0);
-    const modalForCalculator = Math.round(row.todayPrice * 1000);
-    const finalHargaForCalculator = Number.isFinite(finalHarga) && finalHarga > 0 ? Math.round(finalHarga * 1000) : 0;
+    const modalForCalculator = modalForCalc;
+    const finalHargaForCalculator = Number.isFinite(finalHarga) && finalHarga > 0 ? Math.round(finalHarga) : 0;
 
     applyPreset(resolvedPreset.data);
     setModal(modalForCalculator);
@@ -3513,7 +3524,7 @@ export default function Page() {
 
     const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
     setPriceCompareNotice(
-      `Produk "${row.todayProductName}" diproses ke Kalkulator. Preset: ${resolvedPreset.label}, margin target ${targetMarginUsed}% dipakai, modal & target harga ${marketplaceLabel} dikali 1000 (tambah 000). Target: ${rupiahOrDash(finalHargaForCalculator)}.`
+      `Produk "${row.todayProductName}" diproses ke Kalkulator. Preset: ${resolvedPreset.label}, margin target ${targetMarginUsed}% dipakai, skala harga ${priceComparePriceScale === "ribuan" ? "x1000" : "normal"} untuk ${marketplaceLabel}. Target: ${rupiahOrDash(finalHargaForCalculator)}.`
     );
   }
 
@@ -3537,6 +3548,7 @@ export default function Page() {
         { header: "Harga Sebelumnya", key: "previousPrice", width: 16 },
         { header: "Selisih", key: "difference", width: 14 },
         { header: "Status", key: "status", width: 24 },
+        { header: "Kategori Tidak Match", key: "unmatchedType", width: 22 },
         { header: "Similarity", key: "similarity", width: 12 },
         { header: "Preset Dipakai", key: "presetLabel", width: 26 },
         { header: "Marketplace Hitung", key: "marketplace", width: 20 },
@@ -3573,13 +3585,21 @@ export default function Page() {
         const hasManualFinalSelectedMarketplace =
           marketplace === "shopee" ? hasManualFinalShopee : hasManualFinalMall;
         const added = compareSheet.addRow({
-          todayRow: row.todayRowNumber,
-          todayProduct: row.todayProductName,
-          todayPrice: row.todayPrice,
+          todayRow: row.todayRowNumber > 0 ? row.todayRowNumber : "",
+          todayProduct: row.todayProductName || "",
+          todayPrice: row.todayPrice > 0 ? row.todayPrice : "",
           previousProduct: row.previousProductName || "",
           previousPrice: row.previousPrice ?? "",
           difference: row.difference ?? "",
           status: priceCompareStatusLabel[row.status],
+          unmatchedType:
+            row.status === "unmatched"
+              ? row.unmatchedType === "produk_baru"
+                ? "Produk Baru"
+                : row.unmatchedType === "produk_kosong"
+                  ? "Produk Kosong"
+                  : "Tidak Match"
+              : "",
           similarity: row.similarityScore,
           presetLabel: resolvedPreset.label,
           marketplace: marketplaceLabel,
@@ -3609,9 +3629,13 @@ export default function Page() {
           fgColor: { argb: statusFill }
         };
         statusCell.font = { bold: true };
+        if (row.status === "unmatched") {
+          const unmatchedCell = added.getCell(8);
+          unmatchedCell.font = { bold: true };
+        }
       }
 
-      for (const col of [3, 5, 6, 12, 13, 14, 15, 16, 17, 18]) {
+      for (const col of [3, 5, 6, 13, 14, 15, 16, 17, 18, 19]) {
         compareSheet.getColumn(col).numFmt = "#,##0";
       }
 
@@ -3630,12 +3654,19 @@ export default function Page() {
         { metric: "Waktu Export", value: new Date().toLocaleString("id-ID") },
         { metric: "Preset Perhitungan", value: priceComparePresetResolved.label },
         { metric: "Mode Compare", value: priceCompareMode === "strict" ? "Strict" : "Normal" },
+        { metric: "Skala Harga Pricelist", value: priceComparePriceScale === "ribuan" ? "Dalam ribuan (x1000)" : "Rupiah penuh (normal)" },
         { metric: "Toleransi Selisih (Rp)", value: Math.max(0, Math.round(priceCompareToleranceNominal || 0)) },
+        { metric: "Filter Query", value: priceCompareFilterQuery || "-" },
+        { metric: "Filter Status", value: priceCompareFilterStatus },
+        { metric: "Filter Match", value: priceCompareFilterMatch },
+        { metric: "Filter Kategori Tidak Match", value: priceCompareFilterUnmatchedType },
         { metric: "Target Margin (%)", value: targetMargin },
         { metric: "Total Baris", value: priceCompareSummary?.totalRows ?? priceCompareRowsWithCalc.length },
         { metric: "Berhasil Match", value: priceCompareSummary?.matchedRows ?? 0 },
         { metric: "Baris Manual Override Shopee/Mall", value: priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length },
         { metric: "Baris Kena Toleransi", value: priceCompareRowsWithCalc.filter((item) => item.row.toleranceApplied).length },
+        { metric: "Jumlah Produk Baru", value: priceCompareRowsWithCalc.filter((item) => item.row.unmatchedType === "produk_baru").length },
+        { metric: "Jumlah Produk Kosong", value: priceCompareRowsWithCalc.filter((item) => item.row.unmatchedType === "produk_kosong").length },
         { metric: "Hari Ini Lebih Murah", value: priceCompareSummary?.todayCheaperCount ?? 0 },
         { metric: "Sebelumnya Lebih Murah", value: priceCompareSummary?.previousCheaperCount ?? 0 },
         { metric: "Tidak Naik", value: priceCompareSummary?.samePriceCount ?? 0 }
@@ -6203,6 +6234,17 @@ export default function Page() {
                   </select>
                 </label>
                 <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Skala Harga Pricelist</span>
+                  <select
+                    value={priceComparePriceScale}
+                    onChange={(e) => setPriceComparePriceScale(e.target.value as "rupiah" | "ribuan")}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="ribuan">Dalam ribuan (x1000)</option>
+                    <option value="rupiah">Rupiah penuh (normal)</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs text-slate-600">
                   <span>Toleransi Selisih (Rp)</span>
                   <input
                     type="number"
@@ -6214,7 +6256,7 @@ export default function Page() {
                   />
                 </label>
               </div>
-              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.4fr_220px_180px_auto]">
+              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.2fr_190px_170px_190px_auto]">
                 <label className="grid gap-1 text-xs text-slate-600">
                   <span>Cari Produk</span>
                   <input
@@ -6250,12 +6292,25 @@ export default function Page() {
                     <option value="tidak_match">Tidak Match</option>
                   </select>
                 </label>
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Kategori Tidak Match</span>
+                  <select
+                    value={priceCompareFilterUnmatchedType}
+                    onChange={(e) => setPriceCompareFilterUnmatchedType(e.target.value as "semua" | "produk_baru" | "produk_kosong")}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="semua">Semua</option>
+                    <option value="produk_baru">Produk Baru</option>
+                    <option value="produk_kosong">Produk Kosong</option>
+                  </select>
+                </label>
                 <button
                   type="button"
                   onClick={() => {
                     setPriceCompareFilterQuery("");
                     setPriceCompareFilterStatus("semua");
                     setPriceCompareFilterMatch("semua");
+                    setPriceCompareFilterUnmatchedType("semua");
                   }}
                   className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
                 >
@@ -6333,16 +6388,20 @@ export default function Page() {
                         return (
                           <tr key={`${row.todayRowNumber}-${index}`} className={`border-t border-stone-100 ${rowTintClass}`}>
                             <td className="px-2.5 py-2 align-top text-slate-800">
-                              <p className="font-medium">{row.todayProductName}</p>
-                              <p className="text-[11px] text-slate-500">Baris {row.todayRowNumber}</p>
+                              <p className="font-medium">{row.todayProductName || "-"}</p>
+                              <p className="text-[11px] text-slate-500">
+                                {row.todayRowNumber > 0 ? `Baris ${row.todayRowNumber}` : "Tidak ada di hari ini"}
+                              </p>
                             </td>
-                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiah(row.todayPrice)}</td>
+                            <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
+                              {row.todayPrice > 0 ? rupiah(row.todayPrice) : "-"}
+                            </td>
                             <td className="px-2.5 py-2 align-top text-slate-700">
                               {row.matched ? (
                                 row.previousProductName
                               ) : (
                                 <div className="space-y-1">
-                                  <p>-</p>
+                                  <p>{row.previousProductName || "-"}</p>
                                   {row.unmatchedReason ? (
                                     <p className="text-[11px] text-amber-700">{row.unmatchedReason}</p>
                                   ) : null}
@@ -6359,7 +6418,7 @@ export default function Page() {
                             </td>
                             
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
-                              {row.matched && row.previousPrice ? rupiah(row.previousPrice) : "-"}
+                              {typeof row.previousPrice === "number" && row.previousPrice > 0 ? rupiah(row.previousPrice) : "-"}
                             </td>
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">
                               {row.matched && typeof row.difference === "number" ? (
@@ -6375,9 +6434,21 @@ export default function Page() {
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomShopee)}</td>
                             <td className="px-2.5 py-2 text-right align-top tabular-nums text-slate-800">{rupiahOrDash(calc.rekomMall)}</td>
                             <td className="px-2.5 py-2 align-top">
-                              <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-medium ${statusClass}`}>
-                                {priceCompareStatusLabel[row.status]}
-                              </span>
+                              <div className="flex flex-wrap items-center gap-1">
+                                <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-medium ${statusClass}`}>
+                                  {priceCompareStatusLabel[row.status]}
+                                </span>
+                                {row.status === "unmatched" && row.unmatchedType === "produk_baru" ? (
+                                  <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700">
+                                    Produk Baru
+                                  </span>
+                                ) : null}
+                                {row.status === "unmatched" && row.unmatchedType === "produk_kosong" ? (
+                                  <span className="inline-flex rounded-full border border-orange-200 bg-orange-50 px-2 py-1 text-[11px] font-medium text-orange-700">
+                                    Produk Kosong
+                                  </span>
+                                ) : null}
+                              </div>
                             </td>
                             <td className="px-2.5 py-2 align-top text-right">
                               {row.matched && row.todayPrice ? (
