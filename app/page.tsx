@@ -1381,6 +1381,7 @@ export default function Page() {
   const [priceCompareRowFinalPriceShopeeMap, setPriceCompareRowFinalPriceShopeeMap] = useState<Record<string, string>>({});
   const [priceCompareRowFinalPriceMallMap, setPriceCompareRowFinalPriceMallMap] = useState<Record<string, string>>({});
   const [priceCompareRowApprovedMap, setPriceCompareRowApprovedMap] = useState<Record<string, boolean>>({});
+  const [priceComparePinnedRowKey, setPriceComparePinnedRowKey] = useState("");
   const todayPriceListInputRef = useRef<HTMLInputElement | null>(null);
   const previousPriceListInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -3527,6 +3528,7 @@ export default function Page() {
       setPriceCompareRowFinalPriceShopeeMap({});
       setPriceCompareRowFinalPriceMallMap({});
       setPriceCompareRowApprovedMap({});
+      setPriceComparePinnedRowKey("");
       setPriceCompareCollapsedSectionMap(collapsedBySection);
       setPriceCompareSummary(summary);
       setPriceCompareNotice(
@@ -3586,6 +3588,7 @@ export default function Page() {
     if (finalHargaForCalculator > 0) {
       setHarga(finalHargaForCalculator);
     }
+    setPriceComparePinnedRowKey(rowKey);
     setActiveSection("kalkulator-potongan");
 
     const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
@@ -6514,7 +6517,8 @@ export default function Page() {
                           : row.status === "same"
                             ? "bg-stone-100 text-stone-800 border-stone-300"
                             : "bg-stone-100 text-stone-700 border-stone-300";
-                    const cardTintClass = "border-stone-300 bg-white";
+                    const isPinnedRow = priceComparePinnedRowKey === rowKey;
+                    const cardTintClass = isPinnedRow ? "border-amber-300 bg-amber-50/30" : "border-stone-300 bg-white";
 
                     return (
                       <div key={`${row.todayRowNumber}-${index}`} className={`rounded-xl border-2 p-3 ${cardTintClass}`}>
@@ -6528,6 +6532,11 @@ export default function Page() {
                             ) : null}
                             <div className="flex flex-wrap items-center gap-1">
                               <p className="text-sm font-semibold text-slate-900">{row.todayProductName || "-"}</p>
+                              {isPinnedRow ? (
+                                <span className="inline-flex rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                                  Pin Produk Terakhir
+                                </span>
+                              ) : null}
                               {isOutlier ? (
                                 <span className="inline-flex rounded-full border border-stone-500 bg-stone-200 px-2 py-0.5 text-[11px] font-semibold text-stone-900">
                                   Outlier
