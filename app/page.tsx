@@ -3475,13 +3475,148 @@ export default function Page() {
 
   function isAllowedPriceFile(file: File) {
     const name = file.name.toLowerCase();
-    return name.endsWith(".xlsx") || name.endsWith(".csv");
+    return name.endsWith(".xlsx") || name.endsWith(".csv") || name.endsWith(".pdf");
+  }
+
+  function resolveCompareFileKind(file: File) {
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".pdf")) return "pdf" as const;
+    if (name.endsWith(".csv")) return "csv" as const;
+    return "xlsx" as const;
+  }
+
+  function normalizeCompareHeaderToken(raw: unknown) {
+    return String(raw ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function extractComparePrimaryDescription(raw: unknown) {
+    const text = String(raw ?? "").replace(/\r/g, "\n");
+    return text
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) || "";
+  }
+
+  function findCompareHeaderIndex(headerRow: unknown[], aliases: string[]) {
+    const cells = headerRow.map((cell) => normalizeCompareHeaderToken(cell));
+    let bestIndex = -1;
+    let bestScore = 0;
+    for (let i = 0; i < cells.length; i += 1) {
+      const cell = cells[i];
+      if (!cell) continue;
+      for (let j = 0; j < aliases.length; j += 1) {
+        const alias = aliases[j];
+        let score = 0;
+        if (cell === alias) score = 1000 - j;
+        else if (cell.includes(alias)) score = 700 - j;
+        if (score > bestScore) {
+          bestScore = score;
+          bestIndex = i;
+        }
+      }
+    }
+    return bestIndex;
+  }
+
+  function normalizeCompareSku(raw: unknown) {
+    return String(raw ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "")
+      .replace(/[^a-z0-9-]/g, "");
+  }
+
+  function normalizeCompareSkuFamily(raw: unknown) {
+    const sku = normalizeCompareSku(raw);
+    return sku.replace(/-(ty|eu|us|uk|au|jp|cn|kr)$/i, "");
+  }
+
+  async function parsePriceListFileClient(
+    file: File,
+    priceSourceMode: "auto" | "dealer" | "online" | "retail" | "bottom"
+  ) {
+    const xlsxMod = await import("xlsx");
+    const XLSX = ((xlsxMod as unknown as { default?: typeof import("xlsx") }).default ?? xlsxMod) as typeof import("xlsx");
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    if (!sheet) return { rows: [] as Array<Record<string, unknown>>, presence: {} as Record<string, { hasRow: boolean; hasPrice: boolean }> };
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: "" }) as unknown[][];
+    if (!rows.length) return { rows: [] as Array<Record<string, unknown>>, presence: {} as Record<string, { hasRow: boolean; hasPrice: boolean }> };
+
+    const priceAliasesBase = ["dealer price", "dealer", "online price", "bottom price", "retail price", "price", "harga"];
+    const priceAliases =
+      priceSourceMode === "dealer"
+        ? ["dealer price", "dealer", ...priceAliasesBase]
+        : priceSourceMode === "online"
+        ? ["online price", "price online", ...priceAliasesBase]
+        : priceSourceMode === "retail"
+        ? ["retail price", "retail", ...priceAliasesBase]
+        : priceSourceMode === "bottom"
+        ? ["bottom price", "bottom", ...priceAliasesBase]
+        : priceAliasesBase;
+
+    let headerIdx = -1;
+    let skuIdx = -1;
+    let nameIdx = -1;
+    let priceIdx = -1;
+    const scanLimit = Math.min(rows.length, 30);
+    for (let i = 0; i < scanLimit; i += 1) {
+      const row = rows[i] ?? [];
+      const foundSku = findCompareHeaderIndex(row, ["sku", "kode barang", "item code", "model"]);
+      const foundName = findCompareHeaderIndex(row, ["description", "item name", "product", "nama produk"]);
+      const foundPrice = findCompareHeaderIndex(row, priceAliases);
+      if (foundSku >= 0 && foundName >= 0 && foundPrice >= 0) {
+        headerIdx = i;
+        skuIdx = foundSku;
+        nameIdx = foundName;
+        priceIdx = foundPrice;
+        break;
+      }
+    }
+    if (headerIdx < 0) return { rows: [] as Array<Record<string, unknown>>, presence: {} as Record<string, { hasRow: boolean; hasPrice: boolean }> };
+
+    const outRows: Array<Record<string, unknown>> = [];
+    const presence: Record<string, { hasRow: boolean; hasPrice: boolean }> = {};
+    for (let i = headerIdx + 1; i < rows.length; i += 1) {
+      const row = rows[i] ?? [];
+      const skuRaw = String(row[skuIdx] ?? "").trim();
+      const sku = normalizeCompareSku(skuRaw);
+      const productName = extractComparePrimaryDescription(row[nameIdx]);
+      if (!productName) continue;
+      const priceRaw = row[priceIdx];
+      const parsedPrice = Number(
+        String(priceRaw ?? "")
+          .replace(/rp/gi, "")
+          .replace(/[^\d,.-]/g, "")
+          .replace(/\.(?=\d{3}(\D|$))/g, "")
+          .replace(",", ".")
+      );
+      const hasPrice = Number.isFinite(parsedPrice) && parsedPrice > 0;
+      if (sku) {
+        const prev = presence[sku] ?? { hasRow: false, hasPrice: false };
+        presence[sku] = { hasRow: true, hasPrice: prev.hasPrice || hasPrice };
+      }
+      if (!hasPrice) continue;
+      outRows.push({
+        rowNumber: i + 1,
+        sku,
+        skuFamily: normalizeCompareSkuFamily(sku),
+        productName,
+        price: Math.round(parsedPrice)
+      });
+    }
+    return { rows: outRows, presence };
   }
 
   function handlePriceListFile(file: File | null, target: "today" | "previous") {
     if (!file) return;
     if (!isAllowedPriceFile(file)) {
-      setPriceCompareNotice("Format file tidak didukung. Gunakan .xlsx atau .csv.");
+      setPriceCompareNotice("Format file tidak didukung. Gunakan .xlsx, .csv, atau .pdf.");
       return;
     }
 
@@ -3546,18 +3681,56 @@ export default function Page() {
     setPriceCompareNotice("Menganalisis file price list hari ini dan sebelumnya...");
 
     try {
-      const formData = new FormData();
-      formData.append("today_file", todayPriceListFile);
-      formData.append("previous_file", previousPriceListFile);
-      formData.append("compare_mode", priceCompareMode);
-      formData.append("match_strategy", priceCompareMatchStrategy);
-      formData.append("price_source_mode", priceComparePriceSourceMode);
-      formData.append("tolerance_nominal", String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))));
-
-      const response = await fetch("/api/price-compare", {
-        method: "POST",
-        body: formData
-      });
+      const todayKind = resolveCompareFileKind(todayPriceListFile);
+      const previousKind = resolveCompareFileKind(previousPriceListFile);
+      const useClientParse = todayKind !== "pdf" && previousKind !== "pdf";
+      let response: Response;
+      if (useClientParse) {
+        const [todayParsed, previousParsed] = await Promise.all([
+          parsePriceListFileClient(todayPriceListFile, priceComparePriceSourceMode),
+          parsePriceListFileClient(previousPriceListFile, priceComparePriceSourceMode)
+        ]);
+        response = await fetch("/api/price-compare", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            compare_mode: priceCompareMode,
+            match_strategy: priceCompareMatchStrategy,
+            price_source_mode: priceComparePriceSourceMode,
+            tolerance_nominal: String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))),
+            today_rows: todayParsed.rows,
+            previous_rows: previousParsed.rows,
+            previous_sku_presence: previousParsed.presence
+          })
+        });
+      } else {
+        const formData = new FormData();
+        formData.append("today_file", todayPriceListFile);
+        formData.append("previous_file", previousPriceListFile);
+        formData.append("compare_mode", priceCompareMode);
+        formData.append("match_strategy", priceCompareMatchStrategy);
+        formData.append("price_source_mode", priceComparePriceSourceMode);
+        formData.append("tolerance_nominal", String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))));
+        response = await fetch("/api/price-compare", {
+          method: "POST",
+          body: formData
+        });
+      }
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        const rawText = await response.text();
+        const preview = rawText.slice(0, 200).replace(/\s+/g, " ").trim();
+        if (response.status === 413) {
+          setPriceCompareNotice(
+            "Upload gagal (413: Content Too Large). Di Vercel, ukuran request ke API dibatasi. Coba file lebih kecil atau pakai format yang lebih ringan."
+          );
+        } else {
+          setPriceCompareNotice(
+            `API compare mengembalikan respons non-JSON (status ${response.status}). Preview: ${preview || "-"}`
+          );
+        }
+        return;
+      }
       const payload = (await response.json()) as PriceCompareApiResponse;
 
       if (!response.ok || !payload.ok) {
@@ -6248,7 +6421,7 @@ export default function Page() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-cyan-700">Bandingkan Price List Hari Ini vs Sebelumnya</p>
                 <span className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-slate-600">
-                  Format: .xlsx / .csv
+                  Format: .xlsx / .csv / .pdf
                 </span>
               </div>
               <div className="mt-2 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-xs text-slate-600">
@@ -6266,7 +6439,7 @@ export default function Page() {
                   <input
                     ref={todayPriceListInputRef}
                     type="file"
-                    accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    accept=".xlsx,.csv,.pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,application/pdf"
                     onChange={handleTodayPriceListInputChange}
                     className="hidden"
                   />
@@ -6295,7 +6468,7 @@ export default function Page() {
                   <input
                     ref={previousPriceListInputRef}
                     type="file"
-                    accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                    accept=".xlsx,.csv,.pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,application/pdf"
                     onChange={handlePreviousPriceListInputChange}
                     className="hidden"
                   />

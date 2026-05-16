@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
+const pdfParse = require("pdf-parse/lib/pdf-parse.js");
 import {
   extractPriceRowsFromWorkbook,
   parsePriceValue,
@@ -20,6 +21,14 @@ type CatalogRow = ParsedPriceRow & {
 type SkuPresenceInfo = {
   hasRow: boolean;
   hasPrice: boolean;
+};
+type ParsedInputRow = {
+  rowNumber?: number;
+  sku?: string;
+  skuFamily?: string;
+  productName: string;
+  price: number;
+  sectionTitle?: string;
 };
 
 const KNOWN_SECTION_BRANDS = [
@@ -108,6 +117,13 @@ function ensureValidFile(value: FormDataEntryValue | null, label: string) {
     throw new Error(`Ukuran file ${label} terlalu besar. Maksimal 50MB.`);
   }
   return value;
+}
+
+function resolveFileKind(file: File) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".pdf")) return "pdf" as const;
+  if (name.endsWith(".csv")) return "csv" as const;
+  return "xlsx" as const;
 }
 
 function normalizeSku(raw: unknown) {
@@ -442,28 +458,169 @@ function pickUnusedByFamily(
   return null;
 }
 
+function looksLikeSkuToken(token: string) {
+  const t = token.trim();
+  if (!t) return false;
+  if (t.length < 4) return false;
+  if (!/[a-z]/i.test(t) || !/\d/.test(t)) return false;
+  return /^[a-z0-9-]+$/i.test(t);
+}
+
+function extractRowsFromPdfText(text: string) {
+  const lines = text
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const rows: CatalogRow[] = [];
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const line = lines[idx];
+    const tokens = line.split(/\s+/).filter(Boolean);
+    if (tokens.length < 3) continue;
+
+    const skuTokenIdx = tokens.findIndex((token) => looksLikeSkuToken(token));
+    if (skuTokenIdx < 0) continue;
+
+    let priceTokenIdx = -1;
+    let priceValue: number | null = null;
+    for (let tIdx = skuTokenIdx + 1; tIdx < tokens.length; tIdx += 1) {
+      const parsed = parsePriceValue(tokens[tIdx]);
+      if (parsed) {
+        priceTokenIdx = tIdx;
+        priceValue = parsed;
+        break;
+      }
+    }
+    if (priceTokenIdx < 0 || !priceValue) continue;
+
+    const skuRaw = tokens[skuTokenIdx];
+    const productName = tokens.slice(skuTokenIdx + 1, priceTokenIdx).join(" ").trim();
+    if (!productName || productName.length < 3) continue;
+
+    const sku = normalizeSku(skuRaw);
+    const matchName = `${skuRaw} ${productName}`.trim();
+    rows.push({
+      rowNumber: idx + 1,
+      productName,
+      price: Math.round(priceValue),
+      sku,
+      skuFamily: normalizeSkuFamily(sku),
+      normalizedName: toNormalizedName(matchName),
+      matchName,
+      sectionTitle: undefined
+    });
+  }
+  return rows;
+}
+
+async function extractRowsFromFile(file: File, priceSourceMode: PriceSourceMode) {
+  const kind = resolveFileKind(file);
+  if (kind === "pdf") {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const parsed = await pdfParse(buffer);
+    const text = String(parsed?.text ?? "");
+    const rows = extractRowsFromPdfText(text);
+    return rows;
+  }
+  const workbook = XLSX.read(Buffer.from(await file.arrayBuffer()), { type: "buffer" });
+  return extractBestRows(workbook, priceSourceMode);
+}
+
+async function extractPresenceMapFromFile(file: File, priceSourceMode: PriceSourceMode) {
+  const kind = resolveFileKind(file);
+  if (kind === "pdf") {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const parsed = await pdfParse(buffer);
+    const text = String(parsed?.text ?? "");
+    const rows = extractRowsFromPdfText(text);
+    const map = new Map<string, SkuPresenceInfo>();
+    for (const row of rows) {
+      const sku = row.sku || "";
+      if (!sku) continue;
+      map.set(sku, { hasRow: true, hasPrice: Boolean(row.price) });
+    }
+    return map;
+  }
+  const workbook = XLSX.read(Buffer.from(await file.arrayBuffer()), { type: "buffer" });
+  return extractSkuPresenceMap(workbook, priceSourceMode);
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const form = await request.formData();
-    const todayFile = ensureValidFile(form.get("today_file"), "price list hari ini");
-    const previousFile = ensureValidFile(form.get("previous_file"), "price list sebelumnya");
-    const compareModeRaw = String(form.get("compare_mode") ?? "normal").toLowerCase();
+    const contentType = request.headers.get("content-type") || "";
+    const isJsonBody = contentType.toLowerCase().includes("application/json");
+    const payload = isJsonBody ? await request.json() : null;
+
+    const compareModeRaw = String((isJsonBody ? payload?.compare_mode : null) ?? "normal").toLowerCase();
     const compareMode = compareModeRaw === "strict" ? "strict" : "normal";
-    const matchStrategyRaw = String(form.get("match_strategy") ?? "sku_fallback_name").toLowerCase();
+    const matchStrategyRaw = String((isJsonBody ? payload?.match_strategy : null) ?? "sku_fallback_name").toLowerCase();
     const matchStrategy = matchStrategyRaw === "sku_only" ? "sku_only" : "sku_fallback_name";
-    const priceSourceRaw = String(form.get("price_source_mode") ?? "auto").toLowerCase();
+    const priceSourceRaw = String((isJsonBody ? payload?.price_source_mode : null) ?? "auto").toLowerCase();
     const priceSourceMode: PriceSourceMode =
       priceSourceRaw === "dealer" || priceSourceRaw === "online" || priceSourceRaw === "retail" || priceSourceRaw === "bottom"
         ? priceSourceRaw
         : "auto";
-    const toleranceNominal = parsePositiveInt(String(form.get("tolerance_nominal") ?? "0"), 0);
+    const toleranceNominal = parsePositiveInt(String((isJsonBody ? payload?.tolerance_nominal : null) ?? "0"), 0);
 
-    const todayWorkbook = XLSX.read(Buffer.from(await todayFile.arrayBuffer()), { type: "buffer" });
-    const previousWorkbook = XLSX.read(Buffer.from(await previousFile.arrayBuffer()), { type: "buffer" });
+    let todayRows: CatalogRow[] = [];
+    let previousRows: CatalogRow[] = [];
+    let previousSkuPresence = new Map<string, SkuPresenceInfo>();
 
-    const todayRows = extractBestRows(todayWorkbook, priceSourceMode);
-    const previousRows = extractBestRows(previousWorkbook, priceSourceMode);
-    const previousSkuPresence = extractSkuPresenceMap(previousWorkbook, priceSourceMode);
+    if (isJsonBody) {
+      const todayInput = Array.isArray(payload?.today_rows) ? (payload.today_rows as ParsedInputRow[]) : [];
+      const previousInput = Array.isArray(payload?.previous_rows) ? (payload.previous_rows as ParsedInputRow[]) : [];
+      if (!todayInput.length || !previousInput.length) {
+        throw new Error("Data hasil parse kosong. Pastikan file price list berisi data produk dan harga.");
+      }
+      const toCatalogRows = (inputRows: ParsedInputRow[]) =>
+        inputRows
+          .map((item, idx) => {
+            const productName = String(item.productName || "").trim();
+            const parsedPrice = parsePriceValue(item.price);
+            if (!productName || !parsedPrice) return null;
+            const sku = normalizeSku(item.sku);
+            const skuFamily = normalizeSkuFamily(item.skuFamily || sku);
+            const matchName = `${item.sku || ""} ${productName}`.trim();
+            return {
+              rowNumber: Number(item.rowNumber || idx + 1),
+              productName,
+              price: Math.round(parsedPrice),
+              sku,
+              skuFamily,
+              normalizedName: toNormalizedName(matchName || productName),
+              matchName: matchName || productName,
+              sectionTitle: item.sectionTitle ? String(item.sectionTitle) : undefined
+            } as CatalogRow;
+          })
+          .filter(Boolean) as CatalogRow[];
+      todayRows = toCatalogRows(todayInput);
+      previousRows = toCatalogRows(previousInput);
+
+      const presencePayload = payload?.previous_sku_presence as Record<string, { hasRow?: boolean; hasPrice?: boolean }> | undefined;
+      if (presencePayload && typeof presencePayload === "object") {
+        for (const [rawSku, info] of Object.entries(presencePayload)) {
+          const sku = normalizeSku(rawSku);
+          if (!sku) continue;
+          previousSkuPresence.set(sku, {
+            hasRow: Boolean(info?.hasRow),
+            hasPrice: Boolean(info?.hasPrice)
+          });
+        }
+      }
+      if (!previousSkuPresence.size) {
+        for (const row of previousRows) {
+          if (!row.sku) continue;
+          previousSkuPresence.set(row.sku, { hasRow: true, hasPrice: row.price > 0 });
+        }
+      }
+    } else {
+      const form = await request.formData();
+      const todayFile = ensureValidFile(form.get("today_file"), "price list hari ini");
+      const previousFile = ensureValidFile(form.get("previous_file"), "price list sebelumnya");
+      todayRows = await extractRowsFromFile(todayFile, priceSourceMode);
+      previousRows = await extractRowsFromFile(previousFile, priceSourceMode);
+      previousSkuPresence = await extractPresenceMapFromFile(previousFile, priceSourceMode);
+    }
 
     const previousCatalog: CatalogRow[] = previousRows;
     const previousBySku = new Map<string, CatalogRow>();
