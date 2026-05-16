@@ -174,10 +174,12 @@ type ScrapeApiResponse = {
 type PriceCompareStatus = "today_cheaper" | "previous_cheaper" | "same" | "unmatched";
 type PriceCompareRow = {
   todayRowNumber: number;
+  todaySku?: string;
   todayProductName: string;
   todaySectionTitle?: string;
   todayPrice: number;
   matched: boolean;
+  previousSku?: string;
   previousProductName?: string;
   previousSectionTitle?: string;
   previousPrice?: number;
@@ -186,6 +188,17 @@ type PriceCompareRow = {
   status: PriceCompareStatus;
   unmatchedType?: "produk_baru" | "produk_kosong";
   unmatchedReason?: string;
+  analysisNote?: string;
+  matchMethod?:
+    | "sku_exact"
+    | "sku_family_alias"
+    | "name_exact"
+    | "name_fuzzy"
+    | "missing_today"
+    | "sku_missing"
+    | "sku_missing_price"
+    | "sku_duplicate_conflict"
+    | "name_unmatched";
   toleranceApplied?: boolean;
   topCandidates?: Array<{
     productName: string;
@@ -207,6 +220,26 @@ type PriceCompareSummary = {
   todayCheaperCount: number;
   previousCheaperCount: number;
   samePriceCount: number;
+  matchedBySkuExact?: number;
+  matchedBySkuFamily?: number;
+  matchedByNameExact?: number;
+  matchedByNameFuzzy?: number;
+  missingSkuTodayCount?: number;
+  missingSkuPreviousCount?: number;
+  missingPricePreviousCount?: number;
+  duplicateSkuConflictCount?: number;
+};
+
+const PRICE_COMPARE_MATCH_METHOD_LABEL: Record<NonNullable<PriceCompareRow["matchMethod"]>, string> = {
+  sku_exact: "SKU Sama Persis",
+  sku_family_alias: "SKU Family/Alias",
+  name_exact: "Nama Sama Persis",
+  name_fuzzy: "Nama Mirip (Fuzzy)",
+  missing_today: "SKU Hilang di Hari Ini",
+  sku_missing: "SKU Tidak Ada Sebelumnya",
+  sku_missing_price: "Harga Sebelumnya Kosong",
+  sku_duplicate_conflict: "Konflik SKU Duplikat",
+  name_unmatched: "Nama Tidak Match"
 };
 type PriceCompareItemCalc = {
   targetNet: number;
@@ -1368,6 +1401,8 @@ export default function Page() {
   const [priceCompareNotice, setPriceCompareNotice] = useState("");
   const [priceCompareSummary, setPriceCompareSummary] = useState<PriceCompareSummary | null>(null);
   const [priceCompareMode, setPriceCompareMode] = useState<"normal" | "strict">("normal");
+  const [priceCompareMatchStrategy, setPriceCompareMatchStrategy] = useState<"sku_fallback_name" | "sku_only">("sku_fallback_name");
+  const [priceComparePriceSourceMode, setPriceComparePriceSourceMode] = useState<"auto" | "dealer" | "online" | "retail" | "bottom">("dealer");
   const [priceCompareToleranceNominal, setPriceCompareToleranceNominal] = useState(0);
   const [priceComparePriceScale, setPriceComparePriceScale] = useState<"rupiah" | "ribuan">("ribuan");
   const [priceComparePresetId, setPriceComparePresetId] = useState<string>(PRICE_COMPARE_PRESET_AUTO_LAPTOP);
@@ -1375,6 +1410,8 @@ export default function Page() {
   const [priceCompareFilterStatus, setPriceCompareFilterStatus] = useState<"semua" | PriceCompareStatus>("semua");
   const [priceCompareFilterMatch, setPriceCompareFilterMatch] = useState<"semua" | "match" | "tidak_match">("semua");
   const [priceCompareFilterUnmatchedType, setPriceCompareFilterUnmatchedType] = useState<"semua" | "produk_baru" | "produk_kosong">("semua");
+  const [priceCompareFilterMatchMethod, setPriceCompareFilterMatchMethod] = useState<"semua" | NonNullable<PriceCompareRow["matchMethod"]>>("semua");
+  const [priceCompareFilterRiskOnly, setPriceCompareFilterRiskOnly] = useState(false);
   const [priceCompareCollapsedSectionMap, setPriceCompareCollapsedSectionMap] = useState<Record<string, boolean>>({});
   const [priceCompareRowPresetMap, setPriceCompareRowPresetMap] = useState<Record<string, string>>({});
   const [priceCompareRowMarketplaceMap, setPriceCompareRowMarketplaceMap] = useState<Record<string, CompareCalcMarketplace>>({});
@@ -1679,9 +1716,16 @@ export default function Page() {
   const filteredPriceCompareRowsWithCalc = useMemo(() => {
     const query = priceCompareFilterQuery.trim().toLowerCase();
     return priceCompareRowsWithCalc.filter(({ row }) => {
+      const isRiskCase =
+        row.matchMethod === "missing_today" ||
+        row.matchMethod === "sku_missing" ||
+        row.matchMethod === "sku_missing_price" ||
+        row.matchMethod === "sku_duplicate_conflict";
       if (priceCompareFilterStatus !== "semua" && row.status !== priceCompareFilterStatus) return false;
       if (priceCompareFilterMatch === "match" && !row.matched) return false;
       if (priceCompareFilterMatch === "tidak_match" && row.matched) return false;
+      if (priceCompareFilterMatchMethod !== "semua" && row.matchMethod !== priceCompareFilterMatchMethod) return false;
+      if (priceCompareFilterRiskOnly && !isRiskCase) return false;
       if (priceCompareFilterUnmatchedType !== "semua") {
         if (row.status !== "unmatched") return false;
         if (row.unmatchedType !== priceCompareFilterUnmatchedType) return false;
@@ -1689,17 +1733,21 @@ export default function Page() {
       if (!query) return true;
 
       const todayName = row.todayProductName.toLowerCase();
+      const todaySku = String(row.todaySku || "").toLowerCase();
       const previousName = String(row.previousProductName || "").toLowerCase();
-      return todayName.includes(query) || previousName.includes(query);
+      const previousSku = String(row.previousSku || "").toLowerCase();
+      return todayName.includes(query) || previousName.includes(query) || todaySku.includes(query) || previousSku.includes(query);
     });
-  }, [priceCompareFilterMatch, priceCompareFilterQuery, priceCompareFilterStatus, priceCompareFilterUnmatchedType, priceCompareRowsWithCalc]);
+  }, [priceCompareFilterMatch, priceCompareFilterMatchMethod, priceCompareFilterQuery, priceCompareFilterRiskOnly, priceCompareFilterStatus, priceCompareFilterUnmatchedType, priceCompareRowsWithCalc]);
   const isPriceCompareFilterActive = useMemo(
     () =>
       priceCompareFilterQuery.trim() !== "" ||
       priceCompareFilterStatus !== "semua" ||
       priceCompareFilterMatch !== "semua" ||
-      priceCompareFilterUnmatchedType !== "semua",
-    [priceCompareFilterMatch, priceCompareFilterQuery, priceCompareFilterStatus, priceCompareFilterUnmatchedType]
+      priceCompareFilterUnmatchedType !== "semua" ||
+      priceCompareFilterMatchMethod !== "semua" ||
+      priceCompareFilterRiskOnly,
+    [priceCompareFilterMatch, priceCompareFilterMatchMethod, priceCompareFilterQuery, priceCompareFilterRiskOnly, priceCompareFilterStatus, priceCompareFilterUnmatchedType]
   );
   const filteredPriceCompareGroupedBySection = useMemo(() => {
     const map = new Map<string, typeof filteredPriceCompareRowsWithCalc>();
@@ -1719,7 +1767,7 @@ export default function Page() {
   }, [filteredPriceCompareRowsWithCalc, priceCompareRowApprovedMap]);
 
   function getPriceCompareRowKey(row: PriceCompareRow) {
-    return `${row.todayRowNumber}-${row.todayProductName}`;
+    return `${row.todayRowNumber}-${row.todaySku || ""}-${row.todayProductName}`;
   }
 
   function handleChangeGlobalTargetMargin(nextValue: number) {
@@ -3502,6 +3550,8 @@ export default function Page() {
       formData.append("today_file", todayPriceListFile);
       formData.append("previous_file", previousPriceListFile);
       formData.append("compare_mode", priceCompareMode);
+      formData.append("match_strategy", priceCompareMatchStrategy);
+      formData.append("price_source_mode", priceComparePriceSourceMode);
       formData.append("tolerance_nominal", String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))));
 
       const response = await fetch("/api/price-compare", {
@@ -3533,7 +3583,7 @@ export default function Page() {
       setPriceCompareSummary(summary);
       setPriceCompareNotice(
         summary
-          ? `Perbandingan selesai: ${summary.matchedRows}/${summary.totalRows} produk berhasil dicocokkan (mode ${priceCompareMode === "strict" ? "strict" : "normal"}, toleransi ${rupiah(Math.max(0, Math.round(priceCompareToleranceNominal || 0)))}).`
+          ? `Perbandingan selesai: ${summary.matchedRows}/${summary.totalRows} produk berhasil dicocokkan (mode ${priceCompareMode === "strict" ? "strict" : "normal"}, strategi ${priceCompareMatchStrategy === "sku_only" ? "SKU only" : "SKU + fallback nama"}, sumber harga ${priceComparePriceSourceMode}, toleransi ${rupiah(Math.max(0, Math.round(priceCompareToleranceNominal || 0)))}).`
           : "Perbandingan selesai."
       );
     } catch (error) {
@@ -3597,17 +3647,29 @@ export default function Page() {
     );
   }
 
-  async function handleExportPriceCompare(onlyApproved = false) {
+  async function handleExportPriceCompare(mode: "all" | "approved" | "risk_only" = "all") {
     if (!priceCompareRowsWithCalc.length) {
       setPriceCompareNotice("Belum ada hasil compare untuk diekspor.");
       return;
     }
     if (isPriceCompareExporting) return;
-    const rowsToExport = onlyApproved
-      ? priceCompareRowsWithCalc.filter((item) => priceCompareRowApprovedMap[item.rowKey])
-      : priceCompareRowsWithCalc;
-    if (onlyApproved && !rowsToExport.length) {
+    const isRiskCase = (method?: PriceCompareRow["matchMethod"]) =>
+      method === "missing_today" ||
+      method === "sku_missing" ||
+      method === "sku_missing_price" ||
+      method === "sku_duplicate_conflict";
+    const rowsToExport =
+      mode === "approved"
+        ? priceCompareRowsWithCalc.filter((item) => priceCompareRowApprovedMap[item.rowKey])
+        : mode === "risk_only"
+        ? priceCompareRowsWithCalc.filter((item) => isRiskCase(item.row.matchMethod))
+        : priceCompareRowsWithCalc;
+    if (mode === "approved" && !rowsToExport.length) {
       setPriceCompareNotice("Belum ada baris yang di-approve untuk diekspor.");
+      return;
+    }
+    if (mode === "risk_only" && !rowsToExport.length) {
+      setPriceCompareNotice("Belum ada baris kasus risiko untuk diekspor.");
       return;
     }
 
@@ -3618,14 +3680,17 @@ export default function Page() {
       const compareSheet = workbook.addWorksheet("Compare");
       compareSheet.columns = [
         { header: "Baris Hari Ini", key: "todayRow", width: 14 },
+        { header: "SKU Hari Ini", key: "todaySku", width: 18 },
         { header: "Section Hari Ini", key: "todaySectionTitle", width: 24 },
         { header: "Produk Hari Ini", key: "todayProduct", width: 38 },
         { header: "Harga Hari Ini", key: "todayPrice", width: 16 },
+        { header: "SKU Sebelumnya", key: "previousSku", width: 18 },
         { header: "Section Sebelumnya", key: "previousSectionTitle", width: 24 },
         { header: "Produk Sebelumnya", key: "previousProduct", width: 38 },
         { header: "Harga Sebelumnya", key: "previousPrice", width: 16 },
         { header: "Selisih", key: "difference", width: 14 },
         { header: "Status", key: "status", width: 24 },
+        { header: "Metode Match", key: "matchMethod", width: 20 },
         { header: "Kategori Tidak Match", key: "unmatchedType", width: 22 },
         { header: "Similarity", key: "similarity", width: 12 },
         { header: "Preset Dipakai", key: "presetLabel", width: 26 },
@@ -3640,6 +3705,7 @@ export default function Page() {
         { header: "Harga Final Dipakai", key: "finalPrice", width: 18 },
         { header: "Sumber Perhitungan", key: "sourceLabel", width: 20 },
         { header: "Alasan Tidak Match", key: "unmatchedReason", width: 34 },
+        { header: "Catatan Analisa", key: "analysisNote", width: 46 },
         { header: "Top Kandidat Match", key: "topCandidates", width: 60 },
         { header: "Dalam Toleransi", key: "toleranceApplied", width: 16 }
       ];
@@ -3664,14 +3730,18 @@ export default function Page() {
           marketplace === "shopee" ? hasManualFinalShopee : hasManualFinalMall;
         const added = compareSheet.addRow({
           todayRow: row.todayRowNumber > 0 ? row.todayRowNumber : "",
+          todaySku: row.todaySku || "",
           todaySectionTitle: row.todaySectionTitle || "",
           todayProduct: row.todayProductName || "",
           todayPrice: row.todayPrice > 0 ? row.todayPrice : "",
+          previousSku: row.previousSku || "",
           previousSectionTitle: row.previousSectionTitle || "",
           previousProduct: row.previousProductName || "",
           previousPrice: row.previousPrice ?? "",
           difference: row.difference ?? "",
           status: priceCompareStatusLabel[row.status],
+          matchMethod:
+            row.matchMethod ? PRICE_COMPARE_MATCH_METHOD_LABEL[row.matchMethod] : "",
           unmatchedType:
             row.status === "unmatched"
               ? row.unmatchedType === "produk_baru"
@@ -3693,6 +3763,7 @@ export default function Page() {
           finalPrice: hasManualFinalSelectedMarketplace && Number.isFinite(finalPrice) && finalPrice > 0 ? finalPrice : "",
           sourceLabel,
           unmatchedReason: row.matched ? "" : row.unmatchedReason || "",
+          analysisNote: row.analysisNote || "",
           topCandidates: row.matched
             ? ""
             : (row.topCandidates ?? [])
@@ -3703,7 +3774,7 @@ export default function Page() {
         added.getCell(1).note = priceCompareRowApprovedMap[rowKey] ? "Approved" : "Belum Approved";
 
         const statusFill = getStatusFill(row.status);
-        const statusCell = added.getCell(7);
+        const statusCell = added.getCell("status");
         statusCell.fill = {
           type: "pattern",
           pattern: "solid",
@@ -3711,13 +3782,24 @@ export default function Page() {
         };
         statusCell.font = { bold: true };
         if (row.status === "unmatched") {
-          const unmatchedCell = added.getCell(8);
+          const unmatchedCell = added.getCell("unmatchedType");
           unmatchedCell.font = { bold: true };
         }
       }
 
-      for (const col of [4, 7, 8, 15, 16, 17, 18, 19, 20, 21]) {
-        compareSheet.getColumn(col).numFmt = "#,##0";
+      for (const key of [
+        "todayPrice",
+        "previousPrice",
+        "difference",
+        "targetNet",
+        "rekomTokopedia",
+        "rekomShopee",
+        "rekomMall",
+        "finalPriceShopee",
+        "finalPriceMall",
+        "finalPrice"
+      ]) {
+        compareSheet.getColumn(key).numFmt = "#,##0";
       }
 
       const summarySheet = workbook.addWorksheet("Summary");
@@ -3735,14 +3817,18 @@ export default function Page() {
         { metric: "Waktu Export", value: new Date().toLocaleString("id-ID") },
         { metric: "Preset Perhitungan", value: priceComparePresetResolved.label },
         { metric: "Mode Compare", value: priceCompareMode === "strict" ? "Strict" : "Normal" },
+        { metric: "Strategi Match", value: priceCompareMatchStrategy === "sku_only" ? "SKU only" : "SKU + fallback nama" },
+        { metric: "Sumber Harga", value: priceComparePriceSourceMode },
         { metric: "Skala Harga Pricelist", value: priceComparePriceScale === "ribuan" ? "Dalam ribuan (x1000)" : "Rupiah penuh (normal)" },
         { metric: "Toleransi Selisih (Rp)", value: Math.max(0, Math.round(priceCompareToleranceNominal || 0)) },
         { metric: "Filter Query", value: priceCompareFilterQuery || "-" },
         { metric: "Filter Status", value: priceCompareFilterStatus },
         { metric: "Filter Match", value: priceCompareFilterMatch },
         { metric: "Filter Kategori Tidak Match", value: priceCompareFilterUnmatchedType },
+        { metric: "Filter Metode Match", value: priceCompareFilterMatchMethod === "semua" ? "semua" : PRICE_COMPARE_MATCH_METHOD_LABEL[priceCompareFilterMatchMethod] },
+        { metric: "Filter Kasus Risiko", value: priceCompareFilterRiskOnly ? "aktif" : "nonaktif" },
         { metric: "Target Margin (%)", value: targetMargin },
-        { metric: "Mode Export", value: onlyApproved ? "Hanya Approved" : "Semua Baris" },
+        { metric: "Mode Export", value: mode === "approved" ? "Hanya Approved" : mode === "risk_only" ? "Kasus Risiko Saja" : "Semua Baris" },
         { metric: "Total Baris", value: rowsToExport.length },
         { metric: "Berhasil Match", value: priceCompareSummary?.matchedRows ?? 0 },
         { metric: "Baris Manual Override Shopee/Mall", value: priceCompareRowsWithCalc.filter((item) => item.hasManualFinal).length },
@@ -3757,7 +3843,8 @@ export default function Page() {
       summaryRows.forEach((item) => summarySheet.addRow(item));
 
       const stamp = new Date().toISOString().slice(0, 10);
-      const fileName = `${onlyApproved ? "approved-" : ""}hasil-compare-pricelist-${stamp}.xlsx`;
+      const filePrefix = mode === "approved" ? "approved-" : mode === "risk_only" ? "risk-only-" : "";
+      const fileName = `${filePrefix}hasil-compare-pricelist-${stamp}.xlsx`;
       const buffer = await workbook.xlsx.writeBuffer();
       const blob = new Blob([buffer], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -6273,7 +6360,7 @@ export default function Page() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleExportPriceCompare(false)}
+                  onClick={() => handleExportPriceCompare("all")}
                   disabled={isPriceCompareExporting || !priceCompareRowsWithCalc.length}
                   className="rounded-2xl border border-emerald-200 bg-emerald-100 px-3 py-2 text-sm font-medium text-emerald-800 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-70"
                 >
@@ -6281,11 +6368,27 @@ export default function Page() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleExportPriceCompare(true)}
+                  onClick={() => handleExportPriceCompare("approved")}
                   disabled={isPriceCompareExporting || !priceCompareRowsWithCalc.some((item) => priceCompareRowApprovedMap[item.rowKey])}
                   className="rounded-2xl border border-stone-400 bg-white px-3 py-2 text-sm font-medium text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   {isPriceCompareExporting ? "Mengekspor..." : "Export Approved (.xlsx)"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleExportPriceCompare("risk_only")}
+                  disabled={
+                    isPriceCompareExporting ||
+                    !priceCompareRowsWithCalc.some((item) =>
+                      item.row.matchMethod === "missing_today" ||
+                      item.row.matchMethod === "sku_missing" ||
+                      item.row.matchMethod === "sku_missing_price" ||
+                      item.row.matchMethod === "sku_duplicate_conflict"
+                    )
+                  }
+                  className="rounded-2xl border border-amber-300 bg-amber-100 px-3 py-2 text-sm font-medium text-amber-900 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isPriceCompareExporting ? "Mengekspor..." : "Export Kasus Risiko (.xlsx)"}
                 </button>
                 <button
                   type="button"
@@ -6350,7 +6453,7 @@ export default function Page() {
                   <span className="font-medium text-yellow-700">kuning</span> (tidak naik).
                 </span>
               </div>
-              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.4fr_220px_180px_auto]">
+              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.1fr_1.1fr_1fr_220px_180px_auto]">
                 <label className="grid gap-1 text-xs text-slate-600">
                   <span>Mode Compare</span>
                   <select
@@ -6360,6 +6463,31 @@ export default function Page() {
                   >
                     <option value="normal">Normal (lebih longgar)</option>
                     <option value="strict">Strict (lebih ketat)</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Strategi Match SKU</span>
+                  <select
+                    value={priceCompareMatchStrategy}
+                    onChange={(e) => setPriceCompareMatchStrategy(e.target.value as "sku_fallback_name" | "sku_only")}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="sku_fallback_name">SKU + fallback nama (recommended)</option>
+                    <option value="sku_only">SKU only (strict)</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Sumber Harga</span>
+                  <select
+                    value={priceComparePriceSourceMode}
+                    onChange={(e) => setPriceComparePriceSourceMode(e.target.value as "auto" | "dealer" | "online" | "retail" | "bottom")}
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="dealer">Dealer (recommended)</option>
+                    <option value="auto">Auto</option>
+                    <option value="online">Online</option>
+                    <option value="retail">Retail</option>
+                    <option value="bottom">Bottom</option>
                   </select>
                 </label>
                 <label className="grid gap-1 text-xs text-slate-600">
@@ -6385,7 +6513,7 @@ export default function Page() {
                   />
                 </label>
               </div>
-              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.2fr_190px_170px_190px_auto]">
+              <div className="mt-2 grid items-end gap-2 rounded-xl border border-stone-200 bg-white/90 p-2 md:grid-cols-[1.2fr_170px_170px_200px_200px_auto]">
                 <label className="grid gap-1 text-xs text-slate-600">
                   <span>Cari Produk</span>
                   <input
@@ -6433,6 +6561,36 @@ export default function Page() {
                     <option value="produk_kosong">Produk Kosong</option>
                   </select>
                 </label>
+                <label className="grid gap-1 text-xs text-slate-600">
+                  <span>Metode Match</span>
+                  <select
+                    value={priceCompareFilterMatchMethod}
+                    onChange={(e) =>
+                      setPriceCompareFilterMatchMethod(
+                        e.target.value as "semua" | NonNullable<PriceCompareRow["matchMethod"]>
+                      )
+                    }
+                    className="w-full rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-sm text-slate-800 outline-none transition focus:border-stone-300 focus:ring-2 focus:ring-stone-200"
+                  >
+                    <option value="semua">Semua Metode</option>
+                    {Object.entries(PRICE_COMPARE_MATCH_METHOD_LABEL).map(([method, label]) => (
+                      <option key={`method-${method}`} value={method}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setPriceCompareFilterRiskOnly((prev) => !prev)}
+                  className={
+                    priceCompareFilterRiskOnly
+                      ? "rounded-xl border border-amber-300 bg-amber-100 px-3 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-200"
+                      : "rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
+                  }
+                >
+                  {priceCompareFilterRiskOnly ? "Kasus Risiko: ON" : "Hanya Kasus Risiko"}
+                </button>
                 <button
                   type="button"
                   onClick={() => {
@@ -6440,6 +6598,8 @@ export default function Page() {
                     setPriceCompareFilterStatus("semua");
                     setPriceCompareFilterMatch("semua");
                     setPriceCompareFilterUnmatchedType("semua");
+                    setPriceCompareFilterMatchMethod("semua");
+                    setPriceCompareFilterRiskOnly(false);
                   }}
                   className="rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-stone-100"
                 >
@@ -6477,6 +6637,44 @@ export default function Page() {
                   <div className="rounded-xl border border-yellow-200 bg-yellow-50 px-2.5 py-2 text-xs text-yellow-700">
                     Tidak Naik
                     <p className="text-base font-semibold text-yellow-800">{priceCompareSummary.samePriceCount}</p>
+                  </div>
+                </div>
+              ) : null}
+              {priceCompareSummary ? (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-xl border border-sky-200 bg-sky-50 px-2.5 py-2 text-xs text-sky-800">
+                    Match SKU Exact
+                    <p className="text-base font-semibold text-sky-900">{priceCompareSummary.matchedBySkuExact ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-200 bg-cyan-50 px-2.5 py-2 text-xs text-cyan-800">
+                    Match SKU Family
+                    <p className="text-base font-semibold text-cyan-900">{priceCompareSummary.matchedBySkuFamily ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-2 text-xs text-indigo-800">
+                    Match Name (Exact/Fuzzy)
+                    <p className="text-base font-semibold text-indigo-900">
+                      {(priceCompareSummary.matchedByNameExact ?? 0) + (priceCompareSummary.matchedByNameFuzzy ?? 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                    Harga Sebelumnya Kosong
+                    <p className="text-base font-semibold text-amber-900">{priceCompareSummary.missingPricePreviousCount ?? 0}</p>
+                  </div>
+                </div>
+              ) : null}
+              {priceCompareSummary ? (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-stone-700">
+                    SKU Hilang di Hari Ini
+                    <p className="text-base font-semibold text-stone-900">{priceCompareSummary.missingSkuTodayCount ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-stone-700">
+                    SKU Tidak Ada Sebelumnya
+                    <p className="text-base font-semibold text-stone-900">{priceCompareSummary.missingSkuPreviousCount ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-stone-200 bg-white px-2.5 py-2 text-xs text-stone-700">
+                    Konflik SKU Duplikat
+                    <p className="text-base font-semibold text-stone-900">{priceCompareSummary.duplicateSkuConflictCount ?? 0}</p>
                   </div>
                 </div>
               ) : null}
@@ -6531,6 +6729,11 @@ export default function Page() {
                               </span>
                             ) : null}
                             <div className="flex flex-wrap items-center gap-1">
+                              {row.todaySku ? (
+                                <span className="inline-flex rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
+                                  SKU: {row.todaySku}
+                                </span>
+                              ) : null}
                               <p className="text-sm font-semibold text-slate-900">{row.todayProductName || "-"}</p>
                               {isPinnedRow ? (
                                 <span className="inline-flex rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
@@ -6542,14 +6745,23 @@ export default function Page() {
                                   Outlier
                                 </span>
                               ) : null}
+                              {row.matchMethod ? (
+                                <span className="inline-flex rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                  Match: {PRICE_COMPARE_MATCH_METHOD_LABEL[row.matchMethod]}
+                                </span>
+                              ) : null}
                             </div>
                             {row.previousSectionTitle ? (
                               <span className="inline-flex rounded-full border border-stone-300 bg-white px-2 py-0.5 text-[11px] font-medium text-stone-700">
                                 Sebelumnya: {row.previousSectionTitle}
                               </span>
                             ) : null}
-                            <p className="text-xs text-slate-700">{row.previousProductName || "-"}</p>
+                            <p className="text-xs text-slate-700">
+                              {row.previousSku ? `SKU: ${row.previousSku} | ` : ""}
+                              {row.previousProductName || "-"}
+                            </p>
                             {row.unmatchedReason ? <p className="text-xs text-amber-700">{row.unmatchedReason}</p> : null}
+                            {row.analysisNote ? <p className="text-[11px] text-slate-500">{row.analysisNote}</p> : null}
                             {row.topCandidates?.length ? (
                               <p className="text-[11px] text-slate-500">
                                 Kandidat: {row.topCandidates.map((candidate) => `${candidate.productName} (${candidate.similarityScore})`).join(" | ")}
@@ -6613,7 +6825,7 @@ export default function Page() {
                           <p className="w-full text-[11px] text-slate-500">Tip: isi Harga Final otomatis mengaktifkan approve untuk baris ini.</p>
                         </div>
 
-                        {row.matched && row.todayPrice ? (
+                        {(row.todayPrice > 0 && (row.matched || row.unmatchedType === "produk_baru")) ? (
                           <div className="mt-2 grid gap-2 rounded-lg border border-stone-200 bg-white p-2 md:grid-cols-2">
                             <div className="grid gap-2">
                               <select

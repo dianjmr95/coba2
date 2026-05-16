@@ -6,8 +6,32 @@ export type ParsedPriceRow = {
   price: number;
 };
 
-const PRODUCT_HEADER_ALIASES = ["nama produk", "nama barang", "produk", "barang", "product", "item name"];
-const PRICE_HEADER_ALIASES = ["harga", "price", "harga jual", "selling price", "net price", "unit price"];
+const PRODUCT_HEADER_ALIASES = [
+  "nama produk",
+  "nama barang",
+  "produk",
+  "barang",
+  "product",
+  "item name",
+  "item name description",
+  "description",
+  "deskripsi"
+];
+const PRICE_HEADER_ALIASES = [
+  "dealer price",
+  "dealer",
+  "harga dealer",
+  "online price",
+  "bottom price",
+  "harga jual",
+  "selling price",
+  "unit price",
+  "net price",
+  "retail price",
+  "srp",
+  "harga",
+  "price"
+];
 
 type ExtractOptions = {
   sheetName?: string;
@@ -71,11 +95,7 @@ function resolveHeaderRow(rows: unknown[][], forcedHeaderRow?: number) {
   return 0;
 }
 
-function findColumnIndex(
-  headerRow: unknown[],
-  aliases: string[],
-  explicitColumn?: string
-) {
+function findColumnIndex(headerRow: unknown[], aliases: string[], explicitColumn?: string) {
   const headerCells = headerRow.map((cell) => toCellText(cell));
 
   if (explicitColumn) {
@@ -84,8 +104,31 @@ function findColumnIndex(
     if (exactIndex >= 0) return exactIndex;
   }
 
-  const aliasIndex = headerCells.findIndex((cell) => isHeaderMatch(cell, aliases));
-  return aliasIndex;
+  const normalizedAliases = aliases.map((alias) => normalizeText(alias));
+  let bestIndex = -1;
+  let bestScore = 0;
+
+  for (let idx = 0; idx < headerCells.length; idx += 1) {
+    const normalizedCell = normalizeText(headerCells[idx]);
+    if (!normalizedCell) continue;
+
+    let score = 0;
+    for (let aliasIdx = 0; aliasIdx < normalizedAliases.length; aliasIdx += 1) {
+      const alias = normalizedAliases[aliasIdx];
+      if (normalizedCell === alias) {
+        score = Math.max(score, 1000 - aliasIdx);
+      } else if (normalizedCell.includes(alias)) {
+        score = Math.max(score, 700 - aliasIdx);
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = idx;
+    }
+  }
+
+  return bestIndex;
 }
 
 export function extractPriceRowsFromWorkbook(workbook: XLSX.WorkBook, options: ExtractOptions = {}) {
