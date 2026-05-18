@@ -3690,19 +3690,34 @@ export default function Page() {
           parsePriceListFileClient(todayPriceListFile, priceComparePriceSourceMode),
           parsePriceListFileClient(previousPriceListFile, priceComparePriceSourceMode)
         ]);
-        response = await fetch("/api/price-compare", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            compare_mode: priceCompareMode,
-            match_strategy: priceCompareMatchStrategy,
-            price_source_mode: priceComparePriceSourceMode,
-            tolerance_nominal: String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))),
-            today_rows: todayParsed.rows,
-            previous_rows: previousParsed.rows,
-            previous_sku_presence: previousParsed.presence
-          })
-        });
+        const shouldFallbackToFileUpload = todayParsed.rows.length === 0 || previousParsed.rows.length === 0;
+        if (!shouldFallbackToFileUpload) {
+          response = await fetch("/api/price-compare", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              compare_mode: priceCompareMode,
+              match_strategy: priceCompareMatchStrategy,
+              price_source_mode: priceComparePriceSourceMode,
+              tolerance_nominal: String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))),
+              today_rows: todayParsed.rows,
+              previous_rows: previousParsed.rows,
+              previous_sku_presence: previousParsed.presence
+            })
+          });
+        } else {
+          const formData = new FormData();
+          formData.append("today_file", todayPriceListFile);
+          formData.append("previous_file", previousPriceListFile);
+          formData.append("compare_mode", priceCompareMode);
+          formData.append("match_strategy", priceCompareMatchStrategy);
+          formData.append("price_source_mode", priceComparePriceSourceMode);
+          formData.append("tolerance_nominal", String(Math.max(0, Math.round(priceCompareToleranceNominal || 0))));
+          response = await fetch("/api/price-compare", {
+            method: "POST",
+            body: formData
+          });
+        }
       } else {
         const formData = new FormData();
         formData.append("today_file", todayPriceListFile);
