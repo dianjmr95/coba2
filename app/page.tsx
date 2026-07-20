@@ -338,10 +338,10 @@ const SECTION_LABEL: Record<SectionId, string> = {
   "rekap-penjualan": "Rekap Penjualan"
 };
 const ROLE_SECTION_ACCESS: Record<UserRole, SectionId[]> = {
-  admin: ["kalkulator-potongan", "compare-harga", "pembuatan-nota", "rekap-penjualan"],
-  staff: ["kalkulator-potongan", "compare-harga", "pembuatan-nota", "rekap-penjualan"],
-  staff_offline: ["kalkulator-potongan", "compare-harga", "pembuatan-nota", "rekap-penjualan"],
-  viewer: ["kalkulator-potongan", "compare-harga", "rekap-penjualan"]
+  admin: ["kalkulator-potongan", "compare-harga", "pembuatan-nota"],
+  staff: ["kalkulator-potongan", "compare-harga", "pembuatan-nota"],
+  staff_offline: ["kalkulator-potongan", "compare-harga", "pembuatan-nota"],
+  viewer: ["kalkulator-potongan", "compare-harga"]
 };
 const MARKETPLACE_VISUAL = {
   tokopedia: {
@@ -1639,31 +1639,34 @@ export default function Page() {
         const finalPriceShopee = hasManualFinalShopee ? Math.round(parsedFinalShopee) : Math.round(calc.rekomShopee || 0);
         const finalPriceMall = hasManualFinalMall ? Math.round(parsedFinalMall) : Math.round(calc.rekomMall || 0);
         const finalPrice = marketplace === "shopee" ? finalPriceShopee : finalPriceMall;
+        const rekomHarga = marketplace === "shopee" ? Math.round(calc.rekomShopee || 0) : Math.round(calc.rekomMall || 0);
         const finalNetByMarketplace =
-          marketplace === "shopee"
-            ? calcShopee(
-                finalPrice,
-                Number(resolvedPreset.data.shopeeFee),
-                resolvedPreset.data.shopeeAfiliasiPct,
-                resolvedPreset.data.shopeeGratisOngkir,
-                resolvedPreset.data.shopeePromo,
-                resolvedPreset.data.shopeeAsuransi,
-                resolvedPreset.data.shopeeAfiliasiAktif
-              ).net
-            : calcMall(
-                finalPrice,
-                Number(resolvedPreset.data.mallFee),
-                resolvedPreset.data.mallAfiliasiPct,
-                resolvedPreset.data.mallBiayaJasa,
-                resolvedPreset.data.mallGratisOngkir,
-                resolvedPreset.data.mallAfiliasiAktif
-              ).net;
+          (marketplace === "shopee" ? hasManualFinalShopee : hasManualFinalMall) && finalPrice !== rekomHarga
+            ? marketplace === "shopee"
+              ? calcShopee(
+                  finalPrice,
+                  Number(resolvedPreset.data.shopeeFee),
+                  resolvedPreset.data.shopeeAfiliasiPct,
+                  resolvedPreset.data.shopeeGratisOngkir,
+                  resolvedPreset.data.shopeePromo,
+                  resolvedPreset.data.shopeeAsuransi,
+                  resolvedPreset.data.shopeeAfiliasiAktif
+                ).net
+              : calcMall(
+                  finalPrice,
+                  Number(resolvedPreset.data.mallFee),
+                  resolvedPreset.data.mallAfiliasiPct,
+                  resolvedPreset.data.mallBiayaJasa,
+                  resolvedPreset.data.mallGratisOngkir,
+                  resolvedPreset.data.mallAfiliasiAktif
+                ).net
+            : null;
         const diffPercent =
           row.matched && typeof row.difference === "number" && (row.previousPrice ?? 0) > 0
             ? Math.abs((row.difference / Math.max(row.previousPrice ?? 1, 1)) * 100)
             : 0;
         const isOutlierDifference = diffPercent >= 15;
-        const isOutlierBelowTarget = finalNetByMarketplace < calc.targetNet;
+        const isOutlierBelowTarget = typeof finalNetByMarketplace === "number" ? finalNetByMarketplace < calc.targetNet : false;
         const isOutlier = isOutlierDifference || isOutlierBelowTarget;
         const marketplaceLabel = marketplace === "shopee" ? "Shopee" : "Tokopedia Mall";
         const sourceLabelShopee = hasManualFinalShopee
@@ -5685,7 +5688,7 @@ export default function Page() {
   useEffect(() => {
     if (!currentRole) return;
     if (allowedSections.includes(activeSection)) return;
-    setActiveSection(allowedSections[0] ?? "rekap-penjualan");
+    setActiveSection(allowedSections[0] ?? "kalkulator-potongan");
   }, [activeSection, allowedSections, currentRole]);
 
   useEffect(() => {
@@ -5765,6 +5768,12 @@ export default function Page() {
               </p>
             </div>
             <div className="flex items-start gap-2">
+              <a
+                href="/restock"
+                className="inline-flex h-10 items-center rounded-xl border border-emerald-300 bg-emerald-50 px-3 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100"
+              >
+                Restock
+              </a>
               <button
                 type="button"
                 onClick={() => setIsNavHidden((current) => !current)}
@@ -7000,18 +7009,11 @@ export default function Page() {
                             <p className="font-semibold text-slate-900">{rupiahOrDash(calc.rekomMall)}</p>
                           </div>
                         </div>
-                        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs">
-                          <label className="inline-flex items-center gap-2 text-slate-700">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(priceCompareRowApprovedMap[rowKey])}
-                              onChange={(e) => setPriceCompareRowApprovedMap((prev) => ({ ...prev, [rowKey]: e.target.checked }))}
-                            />
-                            Approve untuk Export
-                          </label>
-                          <p className="text-slate-500">Net final ({marketplaceLabel}): <strong className="text-slate-800">{rupiahOrDash(finalNetByMarketplace)}</strong></p>
-                          <p className="w-full text-[11px] text-slate-500">Tip: isi Harga Final otomatis mengaktifkan approve untuk baris ini.</p>
-                        </div>
+                        {typeof finalNetByMarketplace === "number" ? (
+                          <div className="mt-2 flex flex-wrap items-center justify-end gap-2 rounded-lg border border-stone-200 bg-white px-2 py-1 text-xs">
+                            <p className="text-slate-500">Net final ({marketplaceLabel}): <strong className="text-slate-800">{rupiahOrDash(finalNetByMarketplace)}</strong></p>
+                          </div>
+                        ) : null}
 
                         {(row.todayPrice > 0 && (row.matched || row.unmatchedType === "produk_baru")) ? (
                           <div className="mt-2 grid gap-2 rounded-lg border border-stone-200 bg-white p-2 md:grid-cols-2">
