@@ -194,7 +194,10 @@ export default async function DokumenPage({
   const includeTaxModeOverride = includeTaxModeParamRaw === "include" ? "include" : "exclude";
   const includeTaxAmountParamRaw = String(query?.includeTaxAmount || "").trim();
   const includeTaxAmountParsed = Number(includeTaxAmountParamRaw);
-  const hasTaxAmountOverride = Number.isFinite(includeTaxAmountParsed) && includeTaxAmountParsed >= 0;
+  const hasTaxAmountOverride =
+    includeTaxAmountParamRaw !== "" &&
+    Number.isFinite(includeTaxAmountParsed) &&
+    includeTaxAmountParsed >= 0;
   const includeDiscountAmountParamRaw = String(query?.includeDiscountAmount || "").trim();
   const includeDiscountAmountParsed = Number(includeDiscountAmountParamRaw);
   const hasDiscountAmountOverride = Number.isFinite(includeDiscountAmountParsed) && includeDiscountAmountParsed >= 0;
@@ -330,7 +333,10 @@ export default async function DokumenPage({
   const grandTotalRaw = Math.max(0, Number(data.grand_total) || Math.max(0, Number(legacyMeta?.grandTotal) || subtotal));
   const taxAmountRaw = Math.max(0, Number(data.tax_amount) || Math.max(0, Number(legacyMeta?.taxAmount) || 0));
   const inferredTaxFromTotals = taxAmountRaw > 0 || grandTotalRaw > subtotal + 1;
-  const taxEnabledFromData = Boolean(data.tax_enabled) || Boolean(legacyMeta?.taxEnabled) || inferredTaxFromTotals;
+  const hasTaxEnabledInData = typeof data.tax_enabled === "boolean";
+  const taxEnabledFromData = hasTaxEnabledInData
+    ? Boolean(data.tax_enabled)
+    : Boolean(legacyMeta?.taxEnabled) || inferredTaxFromTotals;
   const taxEnabled = hasTaxOverride ? includeTaxOverride : taxEnabledFromData;
   const taxModeFromData = String(data.tax_mode || "").toLowerCase();
   const inferredTaxModeBase =
@@ -414,10 +420,7 @@ export default async function DokumenPage({
   );
   const downPaymentPercentDisplay = total > 0 ? (downPaymentAmount / total) * 100 : downPaymentPercent;
   const remainingAmount = Math.max(0, total - downPaymentAmount);
-  const taxTermsLine =
-    taxMode === "include"
-      ? "Harga diatas sudah termasuk Faktur Pajak."
-      : "Harga diatas belum termasuk Faktur Pajak (PPN ditambahkan terpisah).";
+  const taxTermsLine = "Harga di atas sudah termasuk pajak.";
   const buyerValue = String(data.buyer || "").trim();
   const whatsappValue = String(data.whatsapp || "").trim();
   const contactWhatsappValue = whatsappValue || String(data.phone || "").trim();
@@ -718,9 +721,9 @@ export default async function DokumenPage({
         {!isPenawaran ? (
           <div className="terms">
             <div className="terms-title">KETERANGAN :</div>
+            <div>* {taxTermsLine}</div>
             <div>* Barang yang sudah dibeli tidak bisa dikembalikan.</div>
             <div>* Pihak Starcomp bertanggung jawab atas garansi barang tersebut.</div>
-            {taxEnabled ? <div>* {taxTermsLine}</div> : null}
             <div>* Pihak Starcomp tidak bertanggung jawab atas software yang ada di PC/Laptop.</div>
             <div className="terms-closing">Terima kasih atas kepercayaan Anda.</div>
           </div>
@@ -729,7 +732,7 @@ export default async function DokumenPage({
           <div className="terms">
             <div className="terms-title">Syarat dan Ketentuan:</div>
             <ol className="terms-list">
-              {taxEnabled ? <li>{taxTermsLine}</li> : null}
+              <li>{taxTermsLine}</li>
               <li>Harga yang tertera tidak mengikat dan bisa berubah sewaktu-waktu.</li>
               <li>Pembayaran dilakukan secara tunai/transfer sebelum pengiriman.</li>
               <li>Pengiriman barang akan dilakukan setelah pembayaran dikonfirmasi.</li>
