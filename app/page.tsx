@@ -587,6 +587,7 @@ const rupiah = (num: number) => `Rp ${Math.round(num).toLocaleString("id-ID")}`;
 const rupiahOrDash = (num: number) => (Number.isFinite(num) ? rupiah(num) : "-");
 const cap = (value: number, max: number) => Math.min(value, max);
 const percent = (value: number, pct: number) => value * (pct / 100);
+const PPH_RATE = 0.5;
 const waitMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const createRecapRowId = () =>
   typeof globalThis !== "undefined" && globalThis.crypto && "randomUUID" in globalThis.crypto
@@ -1190,13 +1191,15 @@ function calcTokopedia(
   const biayaProses = 1250;
   const biayaFix = 5060;
   const admin = percent(harga, fee);
+  const pph = percent(harga, PPH_RATE);
   const gratisOngkirCfg = parseTokopediaGratisOngkir(tokopediaGratisOngkirMode);
   const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
   const affiliate = enabledAffiliate ? percent(harga, affiliatePct) : 0;
-  const total = admin + biayaProses + biayaFix + gratisOngkir + affiliate;
+  const total = admin + pph + biayaProses + biayaFix + gratisOngkir + affiliate;
 
   const rincian: RincianItem[] = [
     { label: `Fee Admin (${fee}%)`, value: admin },
+    { label: `PPh (${PPH_RATE}%)`, value: pph },
     { label: "Biaya Proses", value: biayaProses },
     { label: "Biaya Fix", value: biayaFix }
   ];
@@ -1219,15 +1222,17 @@ function calcShopee(
   const biayaProses = 1250;
   const biayaTambahan = 350;
   const admin = percent(harga, fee);
+  const pph = percent(harga, PPH_RATE);
   const gratisOngkirCfg = parseShopeeGratisOngkir(shopeeGratisOngkirMode);
   const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
   const promo = enabledPromo ? cap(percent(harga, 4.5), 60000) : 0;
   const asuransi = enabledAsuransi ? percent(harga, 0.5) : 0;
   const affiliate = enabledAffiliate ? percent(harga, affiliatePct) : 0;
-  const total = admin + biayaProses + biayaTambahan + gratisOngkir + promo + asuransi + affiliate;
+  const total = admin + pph + biayaProses + biayaTambahan + gratisOngkir + promo + asuransi + affiliate;
 
   const rincian: RincianItem[] = [
     { label: `Fee Admin (${fee}%)`, value: admin },
+    { label: `PPh (${PPH_RATE}%)`, value: pph },
     { label: "Biaya Proses", value: biayaProses },
     { label: "Biaya Tambahan Tetap", value: biayaTambahan }
   ];
@@ -1251,14 +1256,16 @@ function calcMall(
   const biayaProses = 1250;
   const biayaFix = 5060;
   const admin = percent(harga, fee);
+  const pph = percent(harga, PPH_RATE);
   const biayaJasa = enabledBiayaJasa ? cap(percent(harga, 1.8), 50000) : 0;
   const gratisOngkirCfg = parseTokopediaGratisOngkir(mallGratisOngkirMode);
   const gratisOngkir = gratisOngkirCfg.active ? cap(percent(harga, gratisOngkirCfg.pct), gratisOngkirCfg.cap) : 0;
   const affiliate = enabledAffiliate ? percent(harga, affiliatePct) : 0;
-  const total = admin + biayaProses + biayaFix + biayaJasa + gratisOngkir + affiliate;
+  const total = admin + pph + biayaProses + biayaFix + biayaJasa + gratisOngkir + affiliate;
 
   const rincian: RincianItem[] = [
     { label: `Fee Admin (${fee}%)`, value: admin },
+    { label: `PPh (${PPH_RATE}%)`, value: pph },
     { label: "Biaya Proses", value: biayaProses },
     { label: "Biaya Fix", value: biayaFix }
   ];
@@ -7256,7 +7263,7 @@ export default function Page() {
           <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-base font-bold text-slate-900">Hasil Simulasi Marketplace</h2>
             <p className="text-sm text-slate-600">
-              Biaya proses semua marketplace: <strong>Rp 1.250</strong>
+              Biaya proses semua marketplace: <strong>Rp 1.250</strong> · PPh tetap: <strong>0,5%</strong>
             </p>
           </div>
 
