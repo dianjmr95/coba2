@@ -283,6 +283,7 @@ type LetterheadProfile = {
   address: string;
   phone: string;
   logoUrl: string;
+  bankAccountInfo?: string;
 };
 
 const PRESET_STORAGE_KEY = "marketplace-potongan-presets-v1";
@@ -306,7 +307,8 @@ const LETTERHEAD_PROFILES: LetterheadProfile[] = [
     subtitle: "Computer Store",
     address: "Jl. Rajawali Raya No.37, Manukan, Condongcatur, Kec. Depok, Kabupaten Sleman, Daerah Istimewa Yogyakarta 55582",
     phone: "08112747434",
-    logoUrl: "/starcomp-logo.png"
+    logoUrl: "/starcomp-logo.png",
+    bankAccountInfo: "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA"
   },
   {
     id: "JKL",
@@ -315,7 +317,8 @@ const LETTERHEAD_PROFILES: LetterheadProfile[] = [
     subtitle: "Computer Store",
     address: "Kaliurang St No.Km 14, Tj. Manding, Umbulmartani, Ngemplak, Sleman Regency, Special Region of Yogyakarta 55584",
     phone: "08112631352",
-    logoUrl: "/starcomp-logo.png"
+    logoUrl: "/starcomp-logo.png",
+    bankAccountInfo: "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA"
   },
   {
     id: "SLO",
@@ -324,7 +327,18 @@ const LETTERHEAD_PROFILES: LetterheadProfile[] = [
     subtitle: "Computer Store",
     address: "Jl. Garuda Mas, Gonilan, Kec. Kartasura, Kabupaten Sukoharjo, Jawa Tengah 57169",
     phone: "08112642352",
-    logoUrl: "/starcomp-logo.png"
+    logoUrl: "/starcomp-logo.png",
+    bankAccountInfo: "BCA : 861-0995960\nA/n : CV STAR MEDIA COMPUTAMA"
+  },
+  {
+    id: "SMG",
+    label: "Semarang",
+    companyName: "STARCOMP SEMARANG",
+    subtitle: "Computer Store",
+    address: "Jl. Karang Rejo Raya No.79C, Karangrejo, Kec. Gajahmungkur, Kota Semarang, Jawa Tengah 50269",
+    phone: "08112951352",
+    logoUrl: "/starcomp-logo.png",
+    bankAccountInfo: "REKENING BCA\n8610820001 STARMEDIA COMPUTAMA"
   }
 ];
 const DEFAULT_LETTERHEAD_PROFILE_ID = LETTERHEAD_PROFILES[0].id;
