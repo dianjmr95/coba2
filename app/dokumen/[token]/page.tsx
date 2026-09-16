@@ -321,7 +321,7 @@ export default async function DokumenPage({
   const letterheadProfileIdRaw = String(legacyMeta?.letterheadProfileId || "").trim();
   const letterheadProfile =
     LETTERHEAD_PROFILES.find((profile) => profile.id === letterheadProfileIdRaw) || DEFAULT_LETTERHEAD_PROFILE;
-  const bankInfoValue = (letterheadProfile as any).bankAccountInfo || DEFAULT_BANK_ACCOUNT_INFO.trim();
+  const bankInfoValue: string = (letterheadProfile as any).bankAccountInfo || DEFAULT_BANK_ACCOUNT_INFO.trim();
   const letterheadLogoSrc = letterheadLogoDataUrlRaw.startsWith("data:image/")
     ? letterheadLogoDataUrlRaw
     : letterheadProfile.logoUrl;
